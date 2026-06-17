@@ -191,16 +191,58 @@ function hasAlerta(f,val){
 function countAlertasRec(rec){ let c=0; SECTORES.forEach(s=>s.fields.forEach(f=>{ if(rec.alertas[f.id]) c++; })); return c; }
 function dayPath(mId,wIdx,dIdx){ return `meses/${mId}/semanas/semana_${wIdx+1}/dias/dia_${dIdx}`; }
 
+// ─── TOKEN DE DISEÑO GLOBAL — negro · dorado · blanco ────────────────────────
+// Negro base: #0a0a0a  Superficie: #111111  Borde: #1e1e1e  Borde activo: #C9A84C
+// Dorado puro: #C9A84C  Dorado suave: #A8843C  Dorado tenue: #C9A84C22
+// Texto primario: #F0E6CC  Texto secundario: #888  Texto terciario: #444
+// Acento ok: #5C8A4A (verde oscuro, no brillante)  Acento error: #8A3A2A
+const G = {
+  bg:      "#0a0a0a",
+  surf:    "#111111",
+  surf2:   "#161616",
+  border:  "#1e1e1e",
+  borderA: "#C9A84C",
+  gold:    "#C9A84C",
+  goldSoft:"#A8843C",
+  goldDim: "#C9A84C18",
+  goldMid: "#C9A84C44",
+  text:    "#F0E6CC",
+  textSec: "#888888",
+  textDim: "#444444",
+  ok:      "#5C8A4A",
+  okBg:    "#1a2a14",
+  err:     "#8A3A2A",
+  errBg:   "#2a1010",
+};
+
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 const S={
-  inp:(e)=>({width:"100%",fontSize:13,padding:"7px 10px",border:`1px solid ${e?"#E24B4A":"#cbd5e1"}`,borderRadius:8,background:e?"#FCEBEB":"#fff",boxSizing:"border-box",color:"#1e293b"}),
-  bpcc:{fontSize:10,background:"#FCEBEB",color:"#A32D2D",border:"1px solid #F09595",borderRadius:3,padding:"1px 5px",fontWeight:600},
-  bpc: {fontSize:10,background:"#E6F1FB",color:"#185FA5",border:"1px solid #85B7EB",borderRadius:3,padding:"1px 5px"},
-  bok: {fontSize:11,background:"#E1F5EE",color:"#085041",borderRadius:3,padding:"2px 6px",fontWeight:500},
-  ber: {fontSize:11,background:"#FCEBEB",color:"#A32D2D",borderRadius:3,padding:"2px 6px",fontWeight:500},
-  card:{border:"1px solid #e2e8f0",borderRadius:10,padding:"1rem",background:"#fff",marginBottom:8},
-  btn:(p,d)=>({padding:"8px 14px",fontSize:12,border:`1px solid ${p?"#185FA5":"#cbd5e1"}`,borderRadius:8,background:p?"#185FA5":"#f8fafc",color:p?"#E6F1FB":"#1e293b",cursor:d?"default":"pointer",opacity:d?.4:1,fontWeight:p?500:400}),
-  btnSm:(p)=>({padding:"5px 10px",fontSize:11,border:`1px solid ${p?"#185FA5":"#e2e8f0"}`,borderRadius:6,background:p?"#185FA5":"#f8fafc",color:p?"#E6F1FB":"#64748b",cursor:"pointer",fontWeight:p?500:400}),
+  inp:(e)=>({
+    width:"100%",fontSize:13,padding:"8px 12px",boxSizing:"border-box",
+    border:`1px solid ${e?G.err:G.border}`,borderRadius:4,
+    background:e?G.errBg:G.surf2,color:G.text,outline:"none",
+    fontFamily:"inherit",
+  }),
+  bpcc:{fontSize:10,background:G.errBg,color:"#C9724C",border:`1px solid #8A3A2A55`,borderRadius:2,padding:"1px 6px",fontWeight:600,letterSpacing:.5},
+  bpc: {fontSize:10,background:G.goldDim,color:G.gold,border:`1px solid ${G.goldMid}`,borderRadius:2,padding:"1px 6px"},
+  bok: {fontSize:10,background:G.okBg,color:"#7AB85A",border:`1px solid #5C8A4A55`,borderRadius:2,padding:"2px 7px",fontWeight:500},
+  ber: {fontSize:10,background:G.errBg,color:"#C9724C",border:`1px solid #8A3A2A55`,borderRadius:2,padding:"2px 7px",fontWeight:500},
+  card:{border:`1px solid ${G.border}`,borderRadius:6,padding:"1rem",background:G.surf,marginBottom:8},
+  btn:(p,d)=>({
+    padding:"8px 14px",fontSize:12,borderRadius:4,cursor:d?"default":"pointer",
+    border:`1px solid ${p?G.gold:G.border}`,
+    background:p?G.gold:G.surf2,
+    color:p?G.bg:G.textSec,
+    opacity:d?.4:1,fontWeight:p?600:400,letterSpacing:p?.5:0,
+    fontFamily:"inherit",
+  }),
+  btnSm:(p)=>({
+    padding:"5px 10px",fontSize:11,borderRadius:3,cursor:"pointer",
+    border:`1px solid ${p?G.gold:G.border}`,
+    background:p?G.gold:G.surf2,
+    color:p?G.bg:G.textSec,
+    fontWeight:p?600:400,fontFamily:"inherit",
+  }),
 };
 
 // ─── MENSAJES MOTIVACIONALES (Cristo) ─────────────────────────────────────────
@@ -888,13 +930,13 @@ function MonthView({monthLabel,onWeekSelect}){
 // Colección Firestore: vida_personal/{mesId}/semanas/semana_{N}/dias/dia_{D}
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Paleta ───────────────────────────────────────────────────────────────────
+// ── Paleta unificada — negro/dorado, un tono dorado distinto por pilar ────────
 const VP_C = {
-  fe:       { bg:"#FAEEDA", border:"#BA7517", text:"#633806", dot:"#EF9F27", emoji:"✝️"  },
-  trading:  { bg:"#E1F5EE", border:"#1D9E75", text:"#085041", dot:"#1D9E75", emoji:"📈"  },
-  hogar:    { bg:"#E6F1FB", border:"#378ADD", text:"#0C447C", dot:"#378ADD", emoji:"🏠"  },
-  nutricion:{ bg:"#FCEBEB", border:"#E24B4A", text:"#A32D2D", dot:"#E24B4A", emoji:"🍗"  },
-  vision:   { bg:"#EEEDFE", border:"#7F77DD", text:"#3C3489", dot:"#7F77DD", emoji:"🃏"  },
+  fe:       { bg:"#0f0c00", border:"#C9A84C", text:"#C9A84C", dot:"#C9A84C", dim:"#C9A84C22", emoji:"✝️"  },
+  trading:  { bg:"#001a0f", border:"#7AB85A", text:"#7AB85A", dot:"#7AB85A", dim:"#7AB85A22", emoji:"📈"  },
+  hogar:    { bg:"#00091a", border:"#6FA3D4", text:"#6FA3D4", dot:"#6FA3D4", dim:"#6FA3D422", emoji:"🏠"  },
+  nutricion:{ bg:"#1a0500", border:"#C9724C", text:"#C9724C", dot:"#C9724C", dim:"#C9724C22", emoji:"🍗"  },
+  vision:   { bg:"#0d0014", border:"#A07AC9", text:"#A07AC9", dot:"#A07AC9", dim:"#A07AC922", emoji:"🃏"  },
 };
 
 // ── 5 Pilares ─────────────────────────────────────────────────────────────────
@@ -947,21 +989,19 @@ function vpDayPath(mesId, wIdx, dIdx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PANTALLA DE SELECCIÓN — 5 PILARES (tappable + código + indicadores)
+// PANTALLA DE SELECCIÓN — 5 PILARES
 // ═══════════════════════════════════════════════════════════════════════════════
 function VpSelector({ onSelect }) {
-  const [codigo, setCodigo]   = useState("");
-  const [err, setErr]         = useState("");
-  const [scores, setScores]   = useState({}); // { pilarId: { pct, diasCon, racha } }
-  const [mesActual]           = useState(() => {
+  const [codigo, setCodigo] = useState("");
+  const [err, setErr]       = useState("");
+  const [scores, setScores] = useState({});
+  const [mesActual]         = useState(() => {
     const d = new Date();
-    const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-    return `${meses[d.getMonth()]}_${d.getFullYear()}`;
+    const m = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+    return `${m[d.getMonth()]}_${d.getFullYear()}`;
   });
-
   const CODIGOS = { FE:"fe", TRADING:"trading", HOGAR:"hogar", FIT:"nutricion", VISION:"vision" };
 
-  // Cargar indicadores del mes actual desde Firebase
   useEffect(() => {
     if (!firebaseOk) return;
     Promise.all(
@@ -991,10 +1031,8 @@ function VpSelector({ onSelect }) {
       VP_PILARES.forEach(p => {
         const s = st[p.id];
         final[p.id] = {
-          pct: s.total > 0 ? Math.round((s.logrado / s.total) * 100) : 0,
-          diasCon: s.dias,
-          logrado: s.logrado,
-          total: s.total,
+          pct: s.total > 0 ? Math.round((s.logrado/s.total)*100) : 0,
+          diasCon: s.dias, logrado: s.logrado, total: s.total,
         };
       });
       setScores(final);
@@ -1008,84 +1046,92 @@ function VpSelector({ onSelect }) {
   }
 
   const DESC = {
-    fe:        "Jarvis Wake Up · Salmos 119:97 · Intención del día",
-    trading:   "Cuenta de fondeo EUR/DOL · Registro de operaciones",
-    hogar:     "Orden, limpieza y preparación del entorno",
-    nutricion: "CrossFit · 2 Tuppers + Desayuno · Macros · Peso",
-    vision:    '"El Loco" · Acción diaria · Tapas 2',
+    fe:"Jarvis Wake Up · Salmos 119:97 · Intención del día",
+    trading:"Cuenta de fondeo EUR/DOL · Registro de operaciones",
+    hogar:"Orden, limpieza y preparación del entorno",
+    nutricion:"CrossFit · 2 Tuppers + Desayuno · Macros · Peso",
+    vision:'"El Loco" · Acción diaria · Tapas 2',
   };
 
-  // Ranking por % del mes
   const ranking = [...VP_PILARES]
     .map(p => ({ ...p, pct: scores[p.id]?.pct || 0 }))
     .sort((a,b) => b.pct - a.pct);
 
   return (
-    <div style={{minHeight:"100vh",background:"#0f0f1a",fontFamily:"system-ui,sans-serif",
-      padding:"24px 16px 48px",maxWidth:430,margin:"0 auto"}}>
+    <div style={{minHeight:"100vh",background:G.bg,fontFamily:"'Courier New',monospace",
+      padding:"28px 16px 56px",maxWidth:430,margin:"0 auto",position:"relative",overflow:"hidden"}}>
+
+      {/* Grid de fondo */}
+      <div style={{position:"fixed",inset:0,opacity:.04,pointerEvents:"none",
+        backgroundImage:`linear-gradient(${G.gold} 1px,transparent 1px),linear-gradient(90deg,${G.gold} 1px,transparent 1px)`,
+        backgroundSize:"36px 36px"}}/>
 
       {/* Header */}
-      <div style={{textAlign:"center",marginBottom:24}}>
-        <div style={{fontSize:30,marginBottom:6}}>🃏</div>
-        <div style={{fontSize:19,fontWeight:600,color:"#fff",marginBottom:3}}>Un Nuevo Comienzo</div>
-        <div style={{fontSize:11,color:"#555",letterSpacing:2}}>TAPAS 2 · 14/06/2026</div>
+      <div style={{textAlign:"center",marginBottom:28,position:"relative"}}>
+        <div style={{width:1,height:36,background:`linear-gradient(to bottom,transparent,${G.gold})`,margin:"0 auto 12px"}}/>
+        <div style={{fontSize:11,color:G.gold,letterSpacing:5,marginBottom:4}}>UN NUEVO COMIENZO</div>
+        <div style={{fontSize:18,fontWeight:700,color:G.text,letterSpacing:2,marginBottom:2}}>
+          TAPAS 2
+        </div>
+        <div style={{fontSize:9,color:G.textDim,letterSpacing:3}}>14.06.2026 · SISTEMA ACTIVO</div>
+        <div style={{width:1,height:20,background:`linear-gradient(to bottom,${G.gold},transparent)`,margin:"12px auto 0"}}/>
       </div>
 
-      {/* Pilares tappables con indicadores */}
-      {VP_PILARES.map((p, idx) => {
+      {/* Pilares */}
+      {VP_PILARES.map(p => {
         const sc = scores[p.id];
         const pct = sc?.pct || 0;
-        const scoreColor = pct === 0 ? "#555" : pct < 50 ? "#E24B4A" : pct < 80 ? "#BA7517" : "#1D9E75";
-        const cod = p.id === "nutricion" ? "FIT" : p.id.toUpperCase();
+        const cod = p.id==="nutricion"?"FIT":p.id.toUpperCase();
+        const pctColor = pct===0?G.textDim:pct<50?"#C9724C":pct<80?G.gold:G.ok;
         return (
           <div key={p.id} onClick={() => onSelect(p.id)}
-            style={{borderRadius:14,marginBottom:8,overflow:"hidden",cursor:"pointer",
-              border:`1px solid ${p.color.border}44`,background:`${p.color.bg}14`,
-              transition:"transform .1s, border-color .15s"}}
-            onMouseOver={e=>{e.currentTarget.style.borderColor=p.color.border;e.currentTarget.style.transform="translateY(-1px)";}}
-            onMouseOut={e=>{e.currentTarget.style.borderColor=`${p.color.border}44`;e.currentTarget.style.transform="none";}}>
+            style={{borderRadius:4,marginBottom:6,cursor:"pointer",overflow:"hidden",
+              border:`1px solid ${p.color.border}33`,background:p.color.bg,
+              transition:"border-color .15s,transform .1s"}}
+            onMouseOver={e=>{e.currentTarget.style.borderColor=p.color.border;e.currentTarget.style.transform="translateX(2px)";}}
+            onMouseOut={e=>{e.currentTarget.style.borderColor=`${p.color.border}33`;e.currentTarget.style.transform="none";}}>
 
-            {/* Fila principal */}
-            <div style={{display:"flex",alignItems:"center",gap:12,padding:"13px 14px 8px"}}>
-              <div style={{width:38,height:38,borderRadius:10,display:"flex",alignItems:"center",
-                justifyContent:"center",fontSize:20,background:`${p.color.bg}44`,
-                border:`1px solid ${p.color.border}44`,flexShrink:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px 6px"}}>
+              {/* Icono */}
+              <div style={{width:34,height:34,borderRadius:3,flexShrink:0,display:"flex",
+                alignItems:"center",justifyContent:"center",fontSize:18,
+                border:`1px solid ${p.color.border}44`,background:`${p.color.border}11`}}>
                 {p.color.emoji}
               </div>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,fontWeight:600,color:"#fff",marginBottom:2}}>{p.label}</div>
-                <div style={{fontSize:11,color:"#888"}}>{DESC[p.id]}</div>
-              </div>
-              <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
-                <div style={{fontSize:10,background:`${p.color.bg}33`,color:p.color.text,
-                  border:`1px solid ${p.color.border}55`,borderRadius:4,padding:"2px 7px",
-                  fontWeight:700,letterSpacing:1}}>
-                  {cod}
+                <div style={{fontSize:12,fontWeight:600,color:p.color.text,letterSpacing:1,marginBottom:2}}>
+                  {p.label.toUpperCase()}
                 </div>
-                <div style={{fontSize:16,fontWeight:700,color:scoreColor}}>
-                  {sc ? `${pct}%` : "—"}
+                <div style={{fontSize:10,color:G.textSec,fontFamily:"system-ui,sans-serif"}}>{DESC[p.id]}</div>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3,flexShrink:0}}>
+                <div style={{fontSize:9,color:p.color.text,border:`1px solid ${p.color.border}55`,
+                  borderRadius:2,padding:"1px 6px",letterSpacing:2,fontWeight:700}}>{cod}</div>
+                <div style={{fontSize:15,fontWeight:700,color:pctColor,fontFamily:"system-ui,sans-serif"}}>
+                  {sc?`${pct}%`:"—"}
                 </div>
               </div>
             </div>
 
-            {/* Barra de progreso mensual */}
-            <div style={{padding:"0 14px 6px"}}>
-              <div style={{height:3,background:"#ffffff10",borderRadius:2,overflow:"hidden"}}>
-                <div style={{height:3,width:`${pct}%`,background:p.color.dot,
-                  borderRadius:2,transition:"width .6s ease"}}/>
+            {/* Barra */}
+            <div style={{margin:"0 14px 6px"}}>
+              <div style={{height:2,background:"#ffffff08",borderRadius:1,overflow:"hidden"}}>
+                <div style={{height:2,width:`${pct}%`,background:p.color.dot,
+                  borderRadius:1,transition:"width .6s ease",
+                  boxShadow:`0 0 6px ${p.color.dot}`}}/>
               </div>
             </div>
 
-            {/* Stats de consistencia */}
-            <div style={{display:"flex",gap:12,padding:"4px 14px 12px"}}>
-              <div style={{fontSize:10,color:"#666"}}>
-                <span style={{color:scoreColor,fontWeight:500}}>{sc?.logrado || 0}</span>
-                <span>/{sc?.total || 0} hábitos este mes</span>
+            {/* Stats */}
+            <div style={{display:"flex",gap:12,padding:"2px 14px 10px",fontFamily:"system-ui,sans-serif"}}>
+              <div style={{fontSize:10,color:G.textDim}}>
+                <span style={{color:pctColor,fontWeight:600}}>{sc?.logrado||0}</span>
+                <span>/{sc?.total||0} hábitos</span>
               </div>
-              {sc?.diasCon > 0 && (
-                <div style={{fontSize:10,color:"#666"}}>
-                  <span style={{color:"#534AB7",fontWeight:500}}>{sc.diasCon}</span>
-                  <span> días registrados</span>
+              {sc?.diasCon>0&&(
+                <div style={{fontSize:10,color:G.textDim}}>
+                  <span style={{color:p.color.text,fontWeight:600}}>{sc.diasCon}</span>
+                  <span> días</span>
                 </div>
               )}
             </div>
@@ -1093,31 +1139,31 @@ function VpSelector({ onSelect }) {
         );
       })}
 
-      {/* Ranking del mes */}
+      {/* Ranking */}
       {Object.keys(scores).length > 0 && (
-        <div style={{borderRadius:14,border:"1px solid #ffffff15",background:"#ffffff08",
-          padding:"14px",marginTop:12,marginBottom:16}}>
-          <div style={{fontSize:12,fontWeight:500,color:"#aaa",marginBottom:10}}>
-            🏆 Ranking del mes — {mesActual.replace("_"," ")}
+        <div style={{border:`1px solid ${G.border}`,borderRadius:4,background:G.surf,
+          padding:"14px",marginTop:10,marginBottom:14}}>
+          <div style={{fontSize:9,color:G.gold,letterSpacing:3,marginBottom:10}}>
+            RANKING · {mesActual.replace("_"," ").toUpperCase()}
           </div>
           {ranking.map((p, i) => {
             const pct = p.pct;
-            const medal = i===0?"🥇":i===1?"🥈":i===2?"🥉":"";
-            const scoreColor = pct===0?"#555":pct<50?"#E24B4A":pct<80?"#BA7517":"#1D9E75";
+            const medal = i===0?"I":i===1?"II":i===2?"III":i===3?"IV":"V";
+            const pctColor = pct===0?G.textDim:pct<50?"#C9724C":pct<80?G.gold:G.ok;
             return (
               <div key={p.id} onClick={() => onSelect(p.id)}
-                style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",
-                  borderRadius:8,marginBottom:4,cursor:"pointer",
-                  background:`${p.color.bg}18`,border:`1px solid ${p.color.border}22`}}>
-                <span style={{fontSize:14,width:22,textAlign:"center"}}>{medal||`${i+1}.`}</span>
-                <span style={{fontSize:13}}>{p.color.emoji}</span>
-                <span style={{flex:1,fontSize:12,color:"#ccc",fontWeight:i===0?500:400}}>
-                  {p.label}
-                </span>
-                <div style={{width:60,height:4,background:"#ffffff15",borderRadius:2,overflow:"hidden"}}>
-                  <div style={{height:4,width:`${pct}%`,background:p.color.dot,borderRadius:2}}/>
+                style={{display:"flex",alignItems:"center",gap:8,padding:"7px 8px",
+                  borderRadius:3,marginBottom:3,cursor:"pointer",
+                  border:`1px solid ${p.color.border}22`,background:p.color.bg,
+                  fontFamily:"system-ui,sans-serif"}}>
+                <span style={{fontSize:9,color:G.textDim,width:18,textAlign:"center",
+                  fontFamily:"'Courier New',monospace",letterSpacing:1}}>{medal}</span>
+                <span style={{fontSize:14}}>{p.color.emoji}</span>
+                <span style={{flex:1,fontSize:11,color:G.textSec}}>{p.label}</span>
+                <div style={{width:48,height:3,background:"#ffffff08",borderRadius:1,overflow:"hidden"}}>
+                  <div style={{height:3,width:`${pct}%`,background:p.color.dot,borderRadius:1}}/>
                 </div>
-                <span style={{fontSize:12,fontWeight:600,color:scoreColor,minWidth:32,textAlign:"right"}}>
+                <span style={{fontSize:11,fontWeight:600,color:pctColor,minWidth:30,textAlign:"right"}}>
                   {pct}%
                 </span>
               </div>
@@ -1126,25 +1172,24 @@ function VpSelector({ onSelect }) {
         </div>
       )}
 
-      {/* Input código alternativo */}
-      <div style={{marginTop:4}}>
-        <div style={{fontSize:11,color:"#444",marginBottom:8,textAlign:"center"}}>
-          O ingresá el código directamente
+      {/* Código */}
+      <div style={{marginTop:8}}>
+        <div style={{fontSize:9,color:G.textDim,marginBottom:8,textAlign:"center",letterSpacing:2}}>
+          O INGRESÁ EL CÓDIGO
         </div>
-        <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",gap:6}}>
           <input value={codigo} onChange={e=>setCodigo(e.target.value.toUpperCase())}
             onKeyDown={e=>e.key==="Enter"&&entrar()}
             placeholder="FE · TRADING · HOGAR · FIT · VISION"
-            style={{flex:1,fontSize:13,padding:"9px 12px",borderRadius:8,
-              border:"1px solid #2a2a3e",background:"#1a1a2e",color:"#fff",
-              letterSpacing:1,outline:"none"}}/>
+            style={{...S.inp(false),letterSpacing:2,fontSize:12}}/>
           <button onClick={entrar}
-            style={{padding:"9px 16px",borderRadius:8,background:"#534AB7",
-              border:"none",color:"#fff",fontSize:15,cursor:"pointer",fontWeight:500}}>
+            style={{padding:"8px 16px",borderRadius:3,background:G.gold,
+              border:"none",color:G.bg,fontSize:13,cursor:"pointer",fontWeight:700,
+              fontFamily:"'Courier New',monospace"}}>
             →
           </button>
         </div>
-        {err && <div style={{fontSize:11,color:"#E24B4A",marginTop:6,textAlign:"center"}}>{err}</div>}
+        {err&&<div style={{fontSize:10,color:"#C9724C",marginTop:6,textAlign:"center",letterSpacing:1}}>{err}</div>}
       </div>
     </div>
   );
