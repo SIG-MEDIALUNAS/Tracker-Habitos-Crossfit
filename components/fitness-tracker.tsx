@@ -680,12 +680,59 @@ function vpDayPath(mesId, wIdx, dIdx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PANTALLA DE SELECCIÓN — 5 PILARES
+// PANTALLA DE SELECCIÓN — 5 PILARES (tappable + código + indicadores)
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpSelector({ onSelect, onVolver }) {
-  const [codigo, setCodigo] = useState("");
-  const [err, setErr] = useState("");
+function VpSelector({ onSelect }) {
+  const [codigo, setCodigo]   = useState("");
+  const [err, setErr]         = useState("");
+  const [scores, setScores]   = useState({}); // { pilarId: { pct, diasCon, racha } }
+  const [mesActual]           = useState(() => {
+    const d = new Date();
+    const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+    return `${meses[d.getMonth()]}_${d.getFullYear()}`;
+  });
+
   const CODIGOS = { FE:"fe", TRADING:"trading", HOGAR:"hogar", FIT:"nutricion", VISION:"vision" };
+
+  // Cargar indicadores del mes actual desde Firebase
+  useEffect(() => {
+    if (!firebaseOk) return;
+    Promise.all(
+      [0,1,2,3].flatMap(wi =>
+        DIAS.map((_, di) =>
+          getDoc(doc(db, vpDayPath(mesActual, wi, di))).then(snap => ({
+            pilares: snap.exists() ? snap.data().pilares || {} : null
+          }))
+        )
+      )
+    ).then(results => {
+      const st = {};
+      VP_PILARES.forEach(p => { st[p.id] = { logrado:0, total:0, dias:0 }; });
+      results.forEach(({ pilares }) => {
+        if (!pilares) return;
+        VP_PILARES.forEach(p => {
+          const h = pilares[p.id]?.habitos || {};
+          const comp = p.habitos.filter(hab => h[hab.id]).length;
+          if (comp > 0 || Object.keys(h).length > 0) {
+            st[p.id].logrado += comp;
+            st[p.id].total   += p.habitos.length;
+            st[p.id].dias++;
+          }
+        });
+      });
+      const final = {};
+      VP_PILARES.forEach(p => {
+        const s = st[p.id];
+        final[p.id] = {
+          pct: s.total > 0 ? Math.round((s.logrado / s.total) * 100) : 0,
+          diasCon: s.dias,
+          logrado: s.logrado,
+          total: s.total,
+        };
+      });
+      setScores(final);
+    });
+  }, [mesActual]);
 
   function entrar() {
     const k = codigo.toUpperCase().trim();
@@ -693,69 +740,144 @@ function VpSelector({ onSelect, onVolver }) {
     else setErr("Código no válido · FE · TRADING · HOGAR · FIT · VISION");
   }
 
+  const DESC = {
+    fe:        "Jarvis Wake Up · Salmos 119:97 · Intención del día",
+    trading:   "Cuenta de fondeo EUR/DOL · Registro de operaciones",
+    hogar:     "Orden, limpieza y preparación del entorno",
+    nutricion: "CrossFit · 2 Tuppers + Desayuno · Macros · Peso",
+    vision:    '"El Loco" · Acción diaria · Tapas 2',
+  };
+
+  // Ranking por % del mes
+  const ranking = [...VP_PILARES]
+    .map(p => ({ ...p, pct: scores[p.id]?.pct || 0 }))
+    .sort((a,b) => b.pct - a.pct);
+
   return (
-    <div style={{minHeight:"100vh",background:"#0f0f1a",fontFamily:"system-ui,sans-serif",padding:"24px 16px 40px"}}>
+    <div style={{minHeight:"100vh",background:"#0f0f1a",fontFamily:"system-ui,sans-serif",
+      padding:"24px 16px 48px",maxWidth:430,margin:"0 auto"}}>
+
       {/* Header */}
-      <div style={{textAlign:"center",marginBottom:28}}>
+      <div style={{textAlign:"center",marginBottom:24}}>
         <div style={{fontSize:30,marginBottom:6}}>🃏</div>
         <div style={{fontSize:19,fontWeight:600,color:"#fff",marginBottom:3}}>Un Nuevo Comienzo</div>
         <div style={{fontSize:11,color:"#555",letterSpacing:2}}>TAPAS 2 · 14/06/2026</div>
       </div>
 
-      {/* Pilares */}
-      {VP_PILARES.map(p => (
-        <div key={p.id} style={{borderRadius:12,marginBottom:8,overflow:"hidden",
-          border:`1px solid ${p.color.border}33`,background:`${p.color.bg}18`}}>
-          <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px"}}>
-            <span style={{fontSize:18}}>{p.color.emoji}</span>
-            <div style={{flex:1}}>
-              <div style={{fontSize:13,fontWeight:500,color:"#fff"}}>{p.label}</div>
-              <div style={{fontSize:11,color:"#888",marginTop:1}}>
-                {p.habitos.length} hábitos diarios
+      {/* Pilares tappables con indicadores */}
+      {VP_PILARES.map((p, idx) => {
+        const sc = scores[p.id];
+        const pct = sc?.pct || 0;
+        const scoreColor = pct === 0 ? "#555" : pct < 50 ? "#E24B4A" : pct < 80 ? "#BA7517" : "#1D9E75";
+        const cod = p.id === "nutricion" ? "FIT" : p.id.toUpperCase();
+        return (
+          <div key={p.id} onClick={() => onSelect(p.id)}
+            style={{borderRadius:14,marginBottom:8,overflow:"hidden",cursor:"pointer",
+              border:`1px solid ${p.color.border}44`,background:`${p.color.bg}14`,
+              transition:"transform .1s, border-color .15s"}}
+            onMouseOver={e=>{e.currentTarget.style.borderColor=p.color.border;e.currentTarget.style.transform="translateY(-1px)";}}
+            onMouseOut={e=>{e.currentTarget.style.borderColor=`${p.color.border}44`;e.currentTarget.style.transform="none";}}>
+
+            {/* Fila principal */}
+            <div style={{display:"flex",alignItems:"center",gap:12,padding:"13px 14px 8px"}}>
+              <div style={{width:38,height:38,borderRadius:10,display:"flex",alignItems:"center",
+                justifyContent:"center",fontSize:20,background:`${p.color.bg}44`,
+                border:`1px solid ${p.color.border}44`,flexShrink:0}}>
+                {p.color.emoji}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,color:"#fff",marginBottom:2}}>{p.label}</div>
+                <div style={{fontSize:11,color:"#888"}}>{DESC[p.id]}</div>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
+                <div style={{fontSize:10,background:`${p.color.bg}33`,color:p.color.text,
+                  border:`1px solid ${p.color.border}55`,borderRadius:4,padding:"2px 7px",
+                  fontWeight:700,letterSpacing:1}}>
+                  {cod}
+                </div>
+                <div style={{fontSize:16,fontWeight:700,color:scoreColor}}>
+                  {sc ? `${pct}%` : "—"}
+                </div>
               </div>
             </div>
-            <div style={{fontSize:10,background:`${p.color.bg}33`,color:p.color.text,
-              border:`1px solid ${p.color.border}55`,borderRadius:4,padding:"2px 8px",
-              fontWeight:700,letterSpacing:1}}>
-              {p.id==="nutricion"?"FIT":p.id.toUpperCase()}
+
+            {/* Barra de progreso mensual */}
+            <div style={{padding:"0 14px 6px"}}>
+              <div style={{height:3,background:"#ffffff10",borderRadius:2,overflow:"hidden"}}>
+                <div style={{height:3,width:`${pct}%`,background:p.color.dot,
+                  borderRadius:2,transition:"width .6s ease"}}/>
+              </div>
+            </div>
+
+            {/* Stats de consistencia */}
+            <div style={{display:"flex",gap:12,padding:"4px 14px 12px"}}>
+              <div style={{fontSize:10,color:"#666"}}>
+                <span style={{color:scoreColor,fontWeight:500}}>{sc?.logrado || 0}</span>
+                <span>/{sc?.total || 0} hábitos este mes</span>
+              </div>
+              {sc?.diasCon > 0 && (
+                <div style={{fontSize:10,color:"#666"}}>
+                  <span style={{color:"#534AB7",fontWeight:500}}>{sc.diasCon}</span>
+                  <span> días registrados</span>
+                </div>
+              )}
             </div>
           </div>
-          <div style={{fontSize:11,color:"#999",padding:"0 14px 11px",lineHeight:1.5}}>
-            {p.id==="fe" && "Jarvis Wake Up · Salmos 119:97 · Intención del día"}
-            {p.id==="trading" && "Cuenta de fondeo EUR/DOL · Registro de operaciones"}
-            {p.id==="hogar" && "Orden, limpieza y preparación del entorno"}
-            {p.id==="nutricion" && "CrossFit · 2 Tuppers + Desayuno · Macros · Peso"}
-            {p.id==="vision" && `"El Loco" · Acción diaria · Tapas 2`}
-          </div>
-        </div>
-      ))}
+        );
+      })}
 
-      {/* Input código */}
-      <div style={{marginTop:20}}>
-        <div style={{fontSize:11,color:"#666",marginBottom:8,textAlign:"center"}}>
-          Ingresá el código del pilar para abrir el registro diario
+      {/* Ranking del mes */}
+      {Object.keys(scores).length > 0 && (
+        <div style={{borderRadius:14,border:"1px solid #ffffff15",background:"#ffffff08",
+          padding:"14px",marginTop:12,marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:500,color:"#aaa",marginBottom:10}}>
+            🏆 Ranking del mes — {mesActual.replace("_"," ")}
+          </div>
+          {ranking.map((p, i) => {
+            const pct = p.pct;
+            const medal = i===0?"🥇":i===1?"🥈":i===2?"🥉":"";
+            const scoreColor = pct===0?"#555":pct<50?"#E24B4A":pct<80?"#BA7517":"#1D9E75";
+            return (
+              <div key={p.id} onClick={() => onSelect(p.id)}
+                style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",
+                  borderRadius:8,marginBottom:4,cursor:"pointer",
+                  background:`${p.color.bg}18`,border:`1px solid ${p.color.border}22`}}>
+                <span style={{fontSize:14,width:22,textAlign:"center"}}>{medal||`${i+1}.`}</span>
+                <span style={{fontSize:13}}>{p.color.emoji}</span>
+                <span style={{flex:1,fontSize:12,color:"#ccc",fontWeight:i===0?500:400}}>
+                  {p.label}
+                </span>
+                <div style={{width:60,height:4,background:"#ffffff15",borderRadius:2,overflow:"hidden"}}>
+                  <div style={{height:4,width:`${pct}%`,background:p.color.dot,borderRadius:2}}/>
+                </div>
+                <span style={{fontSize:12,fontWeight:600,color:scoreColor,minWidth:32,textAlign:"right"}}>
+                  {pct}%
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Input código alternativo */}
+      <div style={{marginTop:4}}>
+        <div style={{fontSize:11,color:"#444",marginBottom:8,textAlign:"center"}}>
+          O ingresá el código directamente
         </div>
         <div style={{display:"flex",gap:8}}>
           <input value={codigo} onChange={e=>setCodigo(e.target.value.toUpperCase())}
             onKeyDown={e=>e.key==="Enter"&&entrar()}
             placeholder="FE · TRADING · HOGAR · FIT · VISION"
             style={{flex:1,fontSize:13,padding:"9px 12px",borderRadius:8,
-              border:"1px solid #333",background:"#1a1a2e",color:"#fff",
+              border:"1px solid #2a2a3e",background:"#1a1a2e",color:"#fff",
               letterSpacing:1,outline:"none"}}/>
           <button onClick={entrar}
             style={{padding:"9px 16px",borderRadius:8,background:"#534AB7",
-              border:"none",color:"#fff",fontSize:15,cursor:"pointer"}}>
+              border:"none",color:"#fff",fontSize:15,cursor:"pointer",fontWeight:500}}>
             →
           </button>
         </div>
         {err && <div style={{fontSize:11,color:"#E24B4A",marginTop:6,textAlign:"center"}}>{err}</div>}
-      </div>
-
-      <div style={{textAlign:"center",marginTop:20}}>
-        <button onClick={onVolver}
-          style={{fontSize:11,color:"#555",background:"none",border:"none",cursor:"pointer",textDecoration:"underline"}}>
-          ← Volver a Control de Proceso
-        </button>
       </div>
     </div>
   );
@@ -1425,7 +1547,7 @@ function VpResumenMensual({ mesId }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // APP ROOT VIDA PERSONAL — mes → semana → día
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpApp({ onVolver }) {
+function VpApp() {
   const [pilarInicial, setPilarInicial] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [nav, setNav]     = useState("month"); // month | week | day
@@ -1434,12 +1556,7 @@ function VpApp({ onVolver }) {
 
   // Mostrar selector si no hay pilar elegido
   if (!pilarInicial) {
-    return (
-      <VpSelector
-        onSelect={p => setPilarInicial(p)}
-        onVolver={onVolver}
-      />
-    );
+    return <VpSelector onSelect={p => setPilarInicial(p)} />;
   }
 
   return (
@@ -1459,11 +1576,6 @@ function VpApp({ onVolver }) {
               style={{fontSize:11,border:"1px solid #e2e8f0",borderRadius:6,
                 padding:"4px 8px",background:"#f8fafc",cursor:"pointer",color:"#64748b"}}>
               ☰ Pilares
-            </button>
-            <button onClick={onVolver}
-              style={{fontSize:11,border:"1px solid #e2e8f0",borderRadius:6,
-                padding:"4px 8px",background:"#f8fafc",cursor:"pointer",color:"#64748b"}}>
-              🥐 Proceso
             </button>
           </div>
         </div>
@@ -1558,147 +1670,14 @@ function VpApp({ onVolver }) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// APP ROOT — con selector entre Control de Proceso y Vida Personal
+// APP ROOT — login → Un Nuevo Comienzo
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function App(){
   const [usuario,setUsuario]=useState(null);
-  const [modulo,setModulo]=useState("selector"); // "selector" | "medialunas" | "vida"
-  const [selectedMonth,setSelectedMonth]=useState(null);
-  const [nav,setNav]=useState("month");
-  const [weekIdx,setWeekIdx]=useState(0);
-  const [dayIdx,setDayIdx]=useState(0);
 
-  if(!usuario) return <LoginScreen onLogin={u=>{setUsuario(u);setModulo("selector");}}/>;
+  if(!usuario) return <LoginScreen onLogin={u=>setUsuario(u)}/>;
 
-  // Módulo Vida Personal
-  if(modulo==="vida"){
-    return <VpApp onVolver={()=>setModulo("selector")}/>;
-  }
-
-  // Selector de módulo
-  if(modulo==="selector"){
-    return(
-      <div style={{minHeight:"100vh",background:"#f8fafc",display:"flex",alignItems:"center",
-        justifyContent:"center",padding:20,fontFamily:"system-ui,sans-serif"}}>
-        <div style={{width:"100%",maxWidth:380}}>
-          <div style={{textAlign:"center",marginBottom:24}}>
-            <div style={{fontSize:11,color:"#94a3b8",letterSpacing:2,marginBottom:4}}>
-              BIENVENIDO, {usuario.nombre.toUpperCase()}
-            </div>
-            <div style={{fontSize:18,fontWeight:500,color:"#1e293b"}}>¿Qué abrimos hoy?</div>
-          </div>
-
-          {/* Opción 1 — Control de Proceso */}
-          <div onClick={()=>setModulo("medialunas")}
-            style={{border:"1px solid #e2e8f0",borderRadius:14,padding:"20px",background:"#fff",
-              cursor:"pointer",marginBottom:12,transition:"border-color .15s"}}
-            onMouseOver={e=>e.currentTarget.style.borderColor="#185FA5"}
-            onMouseOut={e=>e.currentTarget.style.borderColor="#e2e8f0"}>
-            <div style={{display:"flex",alignItems:"center",gap:14}}>
-              <div style={{fontSize:30}}>🥐</div>
-              <div>
-                <div style={{fontSize:15,fontWeight:500,color:"#1e293b"}}>Control de Proceso</div>
-                <div style={{fontSize:12,color:"#64748b",marginTop:2}}>
-                  Medialunas · Sabores Express · P280
-                </div>
-              </div>
-              <div style={{marginLeft:"auto",fontSize:18,color:"#94a3b8"}}>→</div>
-            </div>
-          </div>
-
-          {/* Opción 2 — Vida Personal */}
-          <div onClick={()=>setModulo("vida")}
-            style={{border:"1px solid #534AB755",borderRadius:14,padding:"20px",
-              background:"linear-gradient(135deg,#0f0f1a,#1a1a2e)",cursor:"pointer",marginBottom:12}}>
-            <div style={{display:"flex",alignItems:"center",gap:14}}>
-              <div style={{fontSize:30}}>🃏</div>
-              <div>
-                <div style={{fontSize:15,fontWeight:500,color:"#fff"}}>Un Nuevo Comienzo</div>
-                <div style={{fontSize:12,color:"#888",marginTop:2}}>
-                  Tapas 2 · Fe · Trading · Hogar · Fitness · Visión
-                </div>
-              </div>
-              <div style={{marginLeft:"auto",fontSize:18,color:"#666"}}>→</div>
-            </div>
-            <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
-              {[["✝️","FE"],["📈","TRD"],["🏠","HOG"],["🍗","FIT"],["🃏","VIS"]].map(([e,l])=>(
-                <div key={l} style={{fontSize:11,padding:"3px 8px",borderRadius:6,
-                  background:"#ffffff12",color:"#aaa",border:"1px solid #ffffff15"}}>
-                  {e} {l}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div style={{textAlign:"center",marginTop:12}}>
-            <button onClick={()=>setUsuario(null)}
-              style={{fontSize:11,color:"#94a3b8",background:"none",border:"none",cursor:"pointer"}}>
-              Cerrar sesión
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Módulo Medialunas (original)
-  return(
-    <div style={{fontFamily:"system-ui,sans-serif",maxWidth:430,margin:"0 auto",color:"#1e293b",paddingBottom:32,minHeight:"100vh",background:"#f8fafc"}}>
-      {/* HEADER */}
-      <div style={{padding:"1rem 1rem .75rem",borderBottom:"1px solid #e2e8f0",background:"#fff",marginBottom:8}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-          <div>
-            <div style={{fontSize:15,fontWeight:500}}>🥐 Control de Proceso</div>
-            <div style={{fontSize:11,color:"#64748b"}}>{usuario.nombre} · {usuario.turno} · {usuario.rol==="calidad"?"👁 Calidad":"👷 Operario"}</div>
-          </div>
-          <button onClick={()=>setModulo("selector")} style={{fontSize:11,border:"1px solid #e2e8f0",borderRadius:6,padding:"4px 8px",background:"#f8fafc",cursor:"pointer",color:"#64748b"}}>← Inicio</button>
-        </div>
-        <div style={{fontSize:11,padding:"3px 8px",borderRadius:5,display:"inline-flex",alignItems:"center",gap:5,
-          background:firebaseOk?"#E1F5EE":"#FAEEDA",color:firebaseOk?"#085041":"#633806",marginBottom:8}}>
-          <span style={{width:6,height:6,borderRadius:"50%",background:firebaseOk?"#1D9E75":"#BA7517",display:"inline-block"}}/>
-          {firebaseOk?"Firebase conectado":"Modo local"}
-        </div>
-        <select value={selectedMonth?.id||""} onChange={e=>{
-          const m=ALL_MONTHS.find(x=>x.id===e.target.value);
-          setSelectedMonth(m||null); setNav("month");
-        }} style={{width:"100%",fontSize:13,padding:"7px 10px",border:"1px solid #cbd5e1",borderRadius:8,background:"#fff",boxSizing:"border-box",color:"#1e293b",marginBottom:8}}>
-          <option value="">— Seleccionar período —</option>
-          {YEARS.map(y=>(
-            <optgroup key={y} label={`── ${y} ──`}>
-              {ALL_MONTHS.filter(m=>m.year===y).map(m=>(
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-        {selectedMonth&&(
-          <div style={{display:"flex",gap:4,fontSize:12,alignItems:"center",flexWrap:"wrap"}}>
-            <button onClick={()=>setNav("month")} style={S.btnSm(nav==="month")}>{selectedMonth.label}</button>
-            {(nav==="week"||nav==="day")&&<><span style={{color:"#94a3b8"}}>›</span><button onClick={()=>setNav("week")} style={S.btnSm(nav==="week")}>Sem. {weekIdx+1}</button></>}
-            {nav==="day"&&<><span style={{color:"#94a3b8"}}>›</span><button style={S.btnSm(true)}>{DIAS[dayIdx].substring(0,3)}</button></>}
-          </div>
-        )}
-      </div>
-
-      <div style={{padding:"0 1rem"}}>
-        {!selectedMonth?(
-          <div style={{textAlign:"center",padding:"40px 20px",color:"#94a3b8"}}>
-            <div style={{fontSize:32,marginBottom:10}}>📅</div>
-            <div style={{fontSize:14,marginBottom:4}}>Seleccioná un mes para comenzar</div>
-            <div style={{fontSize:12}}>2026 y 2027 disponibles — 12 meses cada año</div>
-          </div>
-        ):nav==="month"?(
-          <MonthView monthLabel={selectedMonth.label} onWeekSelect={i=>{setWeekIdx(i);setNav("week");}}/>
-        ):nav==="week"?(
-          <WeekView monthId={selectedMonth.id} weekIdx={weekIdx} weekLabel={`Semana ${weekIdx+1}`} usuario={usuario}
-            onDaySelect={i=>{setDayIdx(i);setNav("day");}} onBack={()=>setNav("month")}/>
-        ):(
-          <DayView monthId={selectedMonth.id} weekIdx={weekIdx} dayIdx={dayIdx}
-            usuario={usuario} onBack={()=>setNav("week")}/>
-        )}
-      </div>
-    </div>
-  );
+  return <VpApp />;
 }
 // ─── WEEKLY SUMMARY COMPONENT ─────────────────────────────────────────────────
 // Este componente se agrega al WeekView para mostrar alertas + observaciones
