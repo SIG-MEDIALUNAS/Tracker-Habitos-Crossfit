@@ -203,65 +203,332 @@ const S={
   btnSm:(p)=>({padding:"5px 10px",fontSize:11,border:`1px solid ${p?"#185FA5":"#e2e8f0"}`,borderRadius:6,background:p?"#185FA5":"#f8fafc",color:p?"#E6F1FB":"#64748b",cursor:"pointer",fontWeight:p?500:400}),
 };
 
-// ─── LOGIN ────────────────────────────────────────────────────────────────────
-function LoginScreen({onLogin}){
-  const [rol,setRol]=useState(ROLES.OPERARIO);
-  const [nombre,setNombre]=useState("");
-  const [turno,setTurno]=useState("TM");
-  const [pin,setPin]=useState("");
-  function handleLogin(){
-    if(!nombre.trim()) return;
-    if(rol===ROLES.CALIDAD&&pin!==PIN_CALIDAD){ alert("PIN incorrecto"); return; }
-    onLogin({rol,nombre:nombre.trim(),turno:rol===ROLES.OPERARIO?turno:"CALIDAD"});
+// ─── MENSAJES MOTIVACIONALES (Cristo) ─────────────────────────────────────────
+const MENSAJES_CRISTO = [
+  "Álvaro, todo lo puedes en Cristo que te fortalece. Hoy es un nuevo día para avanzar.",
+  "Álvaro, el Señor es tu pastor. Nada te faltará. Levantate y conquistá el día.",
+  "Álvaro, no temas porque yo estoy contigo. No desmayes, porque yo soy tu Dios.",
+  "Álvaro, el que comenzó en ti la buena obra, la perfeccionará. Seguí adelante.",
+  "Álvaro, encomienda tus obras al Señor y tus pensamientos serán afirmados.",
+  "Álvaro, buscá primero el reino de Dios y lo demás será añadido. Empezá por la fe.",
+  "Álvaro, la fe sin obras está muerta. Hoy actuás. Hoy avanzás. Hoy ganás.",
+  "Álvaro, eres más que vencedor por medio de Aquel que te amó. Que ese poder guíe tu día.",
+  "Álvaro, el Señor renovará tus fuerzas. Correrás sin cansarte, caminarás sin fatigarte.",
+  "Álvaro, confía en el Señor con todo tu corazón y no te apoyes en tu propia prudencia.",
+  "Álvaro, este es el día que hizo el Señor. Alégrense y gócense en él. Aprovechalo al máximo.",
+  "Álvaro, pon todo en sus manos. Él cuida de ti. Avanzá con paz y propósito hoy.",
+];
+
+// ─── VERSÍCULOS DIARIOS (base Salmos 119) ────────────────────────────────────
+const VERSICULOS_BASE = [
+  { ref:"Sal 119:97",  texto:"¡Cuánto amo yo tu ley! Todo el día es ella mi meditación." },
+  { ref:"Sal 119:105", texto:"Lámpara es a mis pies tu palabra, y lumbrera a mi camino." },
+  { ref:"Fil 4:13",    texto:"Todo lo puedo en Cristo que me fortalece." },
+  { ref:"Sal 119:11",  texto:"En mi corazón he guardado tus dichos, para no pecar contra ti." },
+  { ref:"Rom 8:28",    texto:"Sabemos que a los que aman a Dios, todas las cosas les ayudan a bien." },
+  { ref:"Sal 119:165", texto:"Mucha paz tienen los que aman tu ley, y no hay para ellos tropiezo." },
+  { ref:"Prov 3:5-6",  texto:"Confía en el Señor con todo tu corazón. Él enderezará tus veredas." },
+  { ref:"Sal 23:1",    texto:"El Señor es mi pastor; nada me faltará." },
+  { ref:"Is 40:31",    texto:"Los que esperan en el Señor renovarán sus fuerzas." },
+  { ref:"Sal 119:133", texto:"Ordena mis pasos con tu palabra, y ninguna iniquidad se enseñoree de mí." },
+  { ref:"Mat 6:33",    texto:"Buscad primero el reino de Dios y su justicia, y lo demás será añadido." },
+  { ref:"Sal 119:2",   texto:"Bienaventurados los que guardan sus testimonios y le buscan de todo corazón." },
+];
+
+// ─── JARVIS WAKE UP — PANTALLA SAGRADA/TECNOLÓGICA ───────────────────────────
+function LoginScreen({ onLogin }) {
+  const [fase, setFase]           = useState("wake");   // "wake" | "versiculo" | "ready"
+  const [versiculo, setVersiculo] = useState("");
+  const [refPersonal, setRef]     = useState("");
+  const [mostrarInput, setMostrarInput] = useState(false);
+  const [typing, setTyping]       = useState("");
+  const [msgIdx]                  = useState(() => new Date().getDate() % MENSAJES_CRISTO.length);
+  const [versBase]                = useState(() => {
+    // Versículo del día basado en fecha
+    const d = new Date();
+    const key = `versiculo_${d.toISOString().slice(0,10)}`;
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved) return JSON.parse(saved);
+    } catch(e){}
+    return VERSICULOS_BASE[d.getDate() % VERSICULOS_BASE.length];
+  });
+  const [versiculoGuardado, setVersiculoGuardado] = useState(() => {
+    const d = new Date();
+    const key = `versiculo_custom_${d.toISOString().slice(0,10)}`;
+    try { return localStorage.getItem(key) || ""; } catch(e){ return ""; }
+  });
+
+  // Efecto typing para "JARVIS WAKE UP"
+  useEffect(() => {
+    if (fase !== "wake") return;
+    const txt = "JARVIS  WAKE  UP";
+    let i = 0;
+    const iv = setInterval(() => {
+      setTyping(txt.slice(0, i + 1));
+      i++;
+      if (i >= txt.length) clearInterval(iv);
+    }, 80);
+    return () => clearInterval(iv);
+  }, [fase]);
+
+  function guardarVersiculo() {
+    const d = new Date();
+    const key = `versiculo_custom_${d.toISOString().slice(0,10)}`;
+    try { localStorage.setItem(key, versiculo); } catch(e){}
+    setVersiculoGuardado(versiculo);
+    setMostrarInput(false);
   }
-  return(
-    <div style={{minHeight:"100vh",background:"#f8fafc",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-      <div style={{width:"100%",maxWidth:380,background:"#fff",border:"1px solid #e2e8f0",borderRadius:16,padding:"1.5rem"}}>
-        <div style={{textAlign:"center",marginBottom:20}}>
-          <div style={{fontSize:28,marginBottom:6}}>🥐</div>
-          <div style={{fontSize:16,fontWeight:500}}>Control de Proceso</div>
-          <div style={{fontSize:12,color:"#64748b"}}>Medialunas Panificados — SIG</div>
-          <div style={{fontSize:10,color:"#94a3b8",marginTop:2}}>P280 · Rev. A · Nov 2025</div>
+
+  function handleComenzar() {
+    onLogin({ nombre:"Álvaro", rol:"vida", turno:"—" });
+  }
+
+  const fechaHoy = new Date().toLocaleDateString("es-AR", {
+    weekday:"long", day:"numeric", month:"long", year:"numeric"
+  });
+
+  // ── FASE 1: JARVIS WAKE UP ──────────────────────────────────────────────────
+  if (fase === "wake") {
+    return (
+      <div style={{
+        minHeight:"100vh", background:"#000",
+        display:"flex", flexDirection:"column",
+        alignItems:"center", justifyContent:"center",
+        fontFamily:"'Courier New', monospace", padding:24,
+        position:"relative", overflow:"hidden",
+      }}>
+        {/* Grid de fondo */}
+        <div style={{
+          position:"absolute", inset:0, opacity:.07,
+          backgroundImage:"linear-gradient(#C9A84C 1px, transparent 1px), linear-gradient(90deg, #C9A84C 1px, transparent 1px)",
+          backgroundSize:"40px 40px",
+        }}/>
+        {/* Glow central */}
+        <div style={{
+          position:"absolute", width:320, height:320,
+          background:"radial-gradient(circle, #C9A84C22 0%, transparent 70%)",
+          borderRadius:"50%", top:"50%", left:"50%",
+          transform:"translate(-50%,-50%)",
+        }}/>
+
+        {/* Cruz minimalista */}
+        <div style={{position:"relative", marginBottom:32}}>
+          <div style={{width:2, height:60, background:"linear-gradient(to bottom, transparent, #C9A84C, transparent)", margin:"0 auto"}}/>
+          <div style={{width:36, height:2, background:"linear-gradient(to right, transparent, #C9A84C, transparent)", margin:"-30px auto 0"}}/>
         </div>
-        <div style={{marginBottom:12}}>
-          <div style={{fontSize:12,color:"#64748b",marginBottom:5}}>Ingresar como</div>
-          <div style={{display:"flex",gap:8}}>
-            {[ROLES.OPERARIO,ROLES.CALIDAD].map(r=>(
-              <button key={r} onClick={()=>setRol(r)}
-                style={{flex:1,padding:"8px",fontSize:13,borderRadius:8,cursor:"pointer",
-                  border:`1px solid ${rol===r?"#185FA5":"#e2e8f0"}`,
-                  background:rol===r?"#185FA5":"#f8fafc",
-                  color:rol===r?"#E6F1FB":"#64748b",fontWeight:rol===r?500:400}}>
-                {r==="calidad"?"👁 Calidad":"👷 Operario"}
-              </button>
-            ))}
-          </div>
+
+        {/* Typing effect */}
+        <div style={{
+          fontSize:28, fontWeight:700, letterSpacing:8,
+          color:"#C9A84C", textAlign:"center", minHeight:40,
+          textShadow:"0 0 30px #C9A84C88",
+        }}>
+          {typing}
+          <span style={{opacity: typing.length < 16 ? 1 : 0, transition:"opacity .3s"}}>▋</span>
         </div>
-        <div style={{marginBottom:12}}>
-          <div style={{fontSize:12,color:"#64748b",marginBottom:4}}>Nombre / Apellido</div>
-          <input type="text" value={nombre} onChange={e=>setNombre(e.target.value)} placeholder="Ej: Juan García" style={S.inp(false)}/>
+
+        <div style={{
+          fontSize:11, color:"#555", letterSpacing:4,
+          marginTop:12, textAlign:"center",
+        }}>
+          SISTEMA ACTIVO · {fechaHoy.toUpperCase()}
         </div>
-        {rol===ROLES.OPERARIO&&(
-          <div style={{marginBottom:12}}>
-            <div style={{fontSize:12,color:"#64748b",marginBottom:4}}>Turno asignado</div>
-            <div style={{display:"flex",gap:6}}>
-              {TURNOS.map(t=><button key={t} onClick={()=>setTurno(t)} style={{flex:1,...S.btnSm(turno===t)}}>{t}</button>)}
+
+        {/* Botón continuar — aparece después del typing */}
+        <div style={{marginTop:48, opacity: typing.length >= 16 ? 1 : 0, transition:"opacity .8s"}}>
+          <button onClick={() => setFase("versiculo")}
+            style={{
+              background:"transparent", border:"1px solid #C9A84C55",
+              color:"#C9A84C", fontSize:12, letterSpacing:3,
+              padding:"10px 28px", borderRadius:2, cursor:"pointer",
+              fontFamily:"'Courier New', monospace",
+              transition:"all .2s",
+            }}
+            onMouseOver={e=>{e.target.style.background="#C9A84C15"; e.target.style.borderColor="#C9A84C";}}
+            onMouseOut={e=>{e.target.style.background="transparent"; e.target.style.borderColor="#C9A84C55";}}>
+            INICIAR ›
+          </button>
+        </div>
+
+        {/* Línea inferior */}
+        <div style={{position:"absolute", bottom:24, fontSize:9, color:"#333", letterSpacing:2}}>
+          UN NUEVO COMIENZO · TAPAS 2 · 14.06.2026
+        </div>
+      </div>
+    );
+  }
+
+  // ── FASE 2: VERSÍCULO + MENSAJE ─────────────────────────────────────────────
+  if (fase === "versiculo") {
+    const versHoy = versiculoGuardado || versBase.texto;
+    const refHoy  = versiculoGuardado ? "— Mi versículo de hoy" : `— ${versBase.ref}`;
+
+    return (
+      <div style={{
+        minHeight:"100vh",
+        background:"linear-gradient(160deg, #0a0a0a 0%, #0f0c00 50%, #0a0a0a 100%)",
+        display:"flex", flexDirection:"column",
+        fontFamily:"system-ui, sans-serif", position:"relative", overflow:"hidden",
+      }}>
+        {/* Partículas decorativas */}
+        {[...Array(6)].map((_,i) => (
+          <div key={i} style={{
+            position:"absolute",
+            width: i%2===0 ? 1 : 2,
+            height: [80,120,60,100,90,70][i],
+            background:`linear-gradient(to bottom, transparent, #C9A84C${["44","33","55","22","44","33"][i]}, transparent)`,
+            left:`${[8,20,40,60,78,92][i]}%`,
+            top:`${[10,30,15,60,20,45][i]}%`,
+            borderRadius:1,
+          }}/>
+        ))}
+
+        {/* Contenido */}
+        <div style={{flex:1, display:"flex", flexDirection:"column",
+          alignItems:"center", justifyContent:"center", padding:"32px 24px"}}>
+
+          {/* Símbolo */}
+          <div style={{marginBottom:20, textAlign:"center"}}>
+            <div style={{
+              width:56, height:56, borderRadius:"50%",
+              border:"1px solid #C9A84C55",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              margin:"0 auto 12px",
+              background:"radial-gradient(circle, #C9A84C18, transparent)",
+              boxShadow:"0 0 20px #C9A84C22",
+            }}>
+              <span style={{fontSize:22}}>✝</span>
+            </div>
+            <div style={{fontSize:9, color:"#C9A84C88", letterSpacing:4}}>
+              {fechaHoy.toUpperCase()}
             </div>
           </div>
-        )}
-        {rol===ROLES.CALIDAD&&(
-          <div style={{marginBottom:12}}>
-            <div style={{fontSize:12,color:"#64748b",marginBottom:4}}>PIN de Calidad</div>
-            <input type="password" value={pin} onChange={e=>setPin(e.target.value)} placeholder="••••" style={S.inp(false)}/>
+
+          {/* Versículo del día */}
+          <div style={{
+            maxWidth:360, width:"100%",
+            border:"1px solid #C9A84C33",
+            borderRadius:2,
+            background:"#C9A84C08",
+            padding:"20px 20px 16px",
+            marginBottom:20,
+            position:"relative",
+          }}>
+            {/* Comillas decorativas */}
+            <div style={{
+              position:"absolute", top:-14, left:16,
+              fontSize:40, color:"#C9A84C44",
+              fontFamily:"Georgia, serif", lineHeight:1,
+            }}>"</div>
+
+            <p style={{
+              fontSize:15, lineHeight:1.7, color:"#e8e0cc",
+              textAlign:"center", margin:"8px 0 12px",
+              fontStyle:"italic", fontWeight:300,
+            }}>
+              {versHoy}
+            </p>
+            <div style={{
+              fontSize:10, color:"#C9A84C", letterSpacing:2,
+              textAlign:"right", fontStyle:"normal",
+            }}>
+              {refHoy}
+            </div>
+
+            {/* Botón editar */}
+            <button onClick={() => setMostrarInput(v => !v)}
+              style={{
+                display:"block", margin:"10px auto 0",
+                fontSize:10, color:"#C9A84C88", background:"none",
+                border:"1px solid #C9A84C33", borderRadius:2,
+                padding:"4px 12px", cursor:"pointer",
+                letterSpacing:1, fontFamily:"inherit",
+              }}>
+              {mostrarInput ? "CANCELAR" : versiculoGuardado ? "EDITAR VERSÍCULO" : "ESCRIBIR VERSÍCULO DE HOY"}
+            </button>
+
+            {/* Input de versículo */}
+            {mostrarInput && (
+              <div style={{marginTop:12}}>
+                <textarea
+                  value={versiculo}
+                  onChange={e => setVersiculo(e.target.value)}
+                  placeholder="Escribí el versículo que el Señor puso en tu corazón hoy..."
+                  style={{
+                    width:"100%", boxSizing:"border-box",
+                    background:"#0a0a0a", border:"1px solid #C9A84C44",
+                    color:"#e8e0cc", borderRadius:2, padding:"10px",
+                    fontSize:13, fontStyle:"italic", lineHeight:1.6,
+                    resize:"none", height:80, outline:"none",
+                    fontFamily:"inherit",
+                  }}
+                />
+                <button onClick={guardarVersiculo}
+                  style={{
+                    width:"100%", marginTop:6, padding:"8px",
+                    background:"#C9A84C", color:"#000",
+                    border:"none", borderRadius:2, cursor:"pointer",
+                    fontSize:11, letterSpacing:2, fontWeight:600,
+                  }}>
+                  GUARDAR
+                </button>
+              </div>
+            )}
           </div>
-        )}
-        <button onClick={handleLogin} disabled={!nombre.trim()}
-          style={{...S.btn(true,!nombre.trim()),width:"100%",padding:"10px",fontSize:14,marginTop:8}}>
-          Ingresar →
-        </button>
+
+          {/* Mensaje motivacional */}
+          <div style={{
+            maxWidth:360, width:"100%",
+            padding:"16px 20px",
+            marginBottom:28,
+            textAlign:"center",
+          }}>
+            <div style={{
+              fontSize:9, color:"#C9A84C", letterSpacing:3,
+              marginBottom:10,
+            }}>
+              MENSAJE DE HOY
+            </div>
+            <p style={{
+              fontSize:14, lineHeight:1.8, color:"#ccc",
+              margin:0, fontWeight:300,
+            }}>
+              {MENSAJES_CRISTO[msgIdx]}
+            </p>
+          </div>
+
+          {/* Botón COMENZAR */}
+          <button onClick={handleComenzar}
+            style={{
+              width:"100%", maxWidth:300,
+              padding:"16px",
+              background:"linear-gradient(135deg, #C9A84C, #A8843C)",
+              border:"none", borderRadius:2,
+              color:"#000", fontSize:14,
+              fontWeight:700, letterSpacing:4,
+              cursor:"pointer",
+              boxShadow:"0 0 30px #C9A84C44",
+              fontFamily:"inherit",
+              transition:"all .2s",
+            }}
+            onMouseOver={e=>e.target.style.boxShadow="0 0 50px #C9A84C77"}
+            onMouseOut={e=>e.target.style.boxShadow="0 0 30px #C9A84C44"}>
+            COMENZAR
+          </button>
+
+          <div style={{
+            fontSize:9, color:"#333", letterSpacing:3,
+            marginTop:20, textAlign:"center",
+          }}>
+            UN NUEVO COMIENZO · TAPAS 2
+          </div>
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
+
+  return null;
 }
 
 // ─── RECORRIDA FORM ───────────────────────────────────────────────────────────
@@ -1670,12 +1937,12 @@ function VpApp() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// APP ROOT — login → Un Nuevo Comienzo
+// APP ROOT — Jarvis Wake Up → Un Nuevo Comienzo
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function App(){
-  const [usuario,setUsuario]=useState(null);
+  const [activo,setActivo]=useState(false);
 
-  if(!usuario) return <LoginScreen onLogin={u=>setUsuario(u)}/>;
+  if(!activo) return <LoginScreen onLogin={()=>setActivo(true)}/>;
 
   return <VpApp />;
 }
