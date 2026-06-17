@@ -1,4 +1,3 @@
-
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { initializeApp, getApps } from "firebase/app";
@@ -115,25 +114,35 @@ const VERSICULOS_BASE = [
 function LoginScreen({ onLogin }) {
   const [fase, setFase]           = useState("wake");   // "wake" | "versiculo" | "ready"
   const [versiculo, setVersiculo] = useState("");
-  const [refPersonal, setRef]     = useState("");
   const [mostrarInput, setMostrarInput] = useState(false);
   const [typing, setTyping]       = useState("");
+  const [cargandoVers, setCargandoVers] = useState(true);
   const [msgIdx]                  = useState(() => new Date().getDate() % MENSAJES_CRISTO.length);
   const [versBase]                = useState(() => {
-    // Versículo del día basado en fecha
     const d = new Date();
-    const key = `versiculo_${d.toISOString().slice(0,10)}`;
-    try {
-      const saved = localStorage.getItem(key);
-      if (saved) return JSON.parse(saved);
-    } catch(e){}
     return VERSICULOS_BASE[d.getDate() % VERSICULOS_BASE.length];
   });
-  const [versiculoGuardado, setVersiculoGuardado] = useState(() => {
+  const [versiculoGuardado, setVersiculoGuardado] = useState("");
+
+  // Cargar versículo personal de hoy — Firebase primero, localStorage como fallback
+  useEffect(() => {
     const d = new Date();
-    const key = `versiculo_custom_${d.toISOString().slice(0,10)}`;
-    try { return localStorage.getItem(key) || ""; } catch(e){ return ""; }
-  });
+    const keyLocal = `versiculo_custom_${d.toISOString().slice(0,10)}`;
+    const { mesId, wIdx, dIdx } = hoyVp();
+
+    async function cargar() {
+      if (firebaseOk) {
+        try {
+          const snap = await getDoc(doc(db, vpDayPath(mesId, wIdx, dIdx)));
+          const vers = snap.exists() ? snap.data().pilares?.fe?.versiculoDelDia : "";
+          if (vers) { setVersiculoGuardado(vers); setCargandoVers(false); return; }
+        } catch(e) {}
+      }
+      try { setVersiculoGuardado(localStorage.getItem(keyLocal) || ""); } catch(e) {}
+      setCargandoVers(false);
+    }
+    cargar();
+  }, []);
 
   // Efecto typing para "JARVIS WAKE UP"
   useEffect(() => {
@@ -148,10 +157,23 @@ function LoginScreen({ onLogin }) {
     return () => clearInterval(iv);
   }, [fase]);
 
-  function guardarVersiculo() {
+  async function guardarVersiculo() {
     const d = new Date();
-    const key = `versiculo_custom_${d.toISOString().slice(0,10)}`;
-    try { localStorage.setItem(key, versiculo); } catch(e){}
+    const keyLocal = `versiculo_custom_${d.toISOString().slice(0,10)}`;
+    try { localStorage.setItem(keyLocal, versiculo); } catch(e){}
+
+    if (firebaseOk) {
+      const { mesId, wIdx, dIdx } = hoyVp();
+      try {
+        const path = vpDayPath(mesId, wIdx, dIdx);
+        const snap = await getDoc(doc(db, path));
+        const pilaresActuales = snap.exists() ? snap.data().pilares || {} : {};
+        const feActual = pilaresActuales.fe || {};
+        await setDoc(doc(db, path), {
+          pilares: { ...pilaresActuales, fe: { ...feActual, versiculoDelDia: versiculo } }
+        }, { merge: true });
+      } catch(e) {}
+    }
     setVersiculoGuardado(versiculo);
     setMostrarInput(false);
   }
@@ -331,16 +353,18 @@ function LoginScreen({ onLogin }) {
             </div>
 
             {/* Botón editar */}
-            <button onClick={() => setMostrarInput(v => !v)}
-              style={{
-                display:"block", margin:"10px auto 0",
-                fontSize:10, color:"#C9A84C88", background:"none",
-                border:"1px solid #C9A84C33", borderRadius:2,
-                padding:"4px 12px", cursor:"pointer",
-                letterSpacing:1, fontFamily:"inherit",
-              }}>
-              {mostrarInput ? "CANCELAR" : versiculoGuardado ? "EDITAR VERSÍCULO" : "ESCRIBIR VERSÍCULO DE HOY"}
-            </button>
+            {!cargandoVers && (
+              <button onClick={() => { setVersiculo(versiculoGuardado); setMostrarInput(v => !v); }}
+                style={{
+                  display:"block", margin:"10px auto 0",
+                  fontSize:10, color:"#C9A84C88", background:"none",
+                  border:"1px solid #C9A84C33", borderRadius:2,
+                  padding:"4px 12px", cursor:"pointer",
+                  letterSpacing:1, fontFamily:"inherit",
+                }}>
+                {mostrarInput ? "CANCELAR" : versiculoGuardado ? "EDITAR VERSÍCULO" : "ESCRIBIR VERSÍCULO DE HOY"}
+              </button>
+            )}
 
             {/* Input de versículo */}
             {mostrarInput && (
@@ -425,9 +449,6 @@ function LoginScreen({ onLogin }) {
   return null;
 }
 
-// ─── RECORRIDA FORM ───────────────────────────────────────────────────────────
-
-
 // ─── IMPORTS EXTRA PARA VIDA PERSONAL ───────────────────────────────────────
 // getDoc ya importado, agregar si falta:
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -458,7 +479,7 @@ const VP_PILARES = [
     { id:"opere",     label:"Operación planificada ejecutada" },
     { id:"registro",  label:"Registré resultado / aprendizaje" },
     { id:"efectivo",  label:"Gestioné ingreso de efectivo (si corresponde)" },
-  ], notaLabel:"Resultado o aprendizaje del día en trading" },
+  ], notaLabel:"Resultado o aprendizaje del día en trading", esTrading:true },
 
   { id:"hogar", label:"Hogar & Orden", color:VP_C.hogar, habitos:[
     { id:"orden_am",  label:"Ordené y limpié el espacio al levantarme" },
@@ -494,18 +515,62 @@ function vpDayPath(mesId, wIdx, dIdx) {
   return `vida_personal/${mesId}/semanas/semana_${wIdx+1}/dias/dia_${dIdx}`;
 }
 
+// ── Mapeo fecha real ↔ {mesId, wIdx, dIdx} ────────────────────────────────────
+// Convención: Semana 1 = días 1-7 del mes, Semana 2 = días 8-14, etc.
+// dIdx 0=Lunes...6=Domingo (alineado a DIAS), usando el día de calendario real.
+const MESES_ID = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+function fechaAVp(fecha) {
+  const dia = fecha.getDate();             // 1-31
+  const wIdx = Math.min(3, Math.floor((dia - 1) / 7)); // semana 1-4 (clamp semana 5+ a la 4)
+  // getDay(): 0=Domingo..6=Sábado → convertir a 0=Lunes..6=Domingo
+  const dowRaw = fecha.getDay();
+  const dIdx = dowRaw === 0 ? 6 : dowRaw - 1;
+  const mesId = `${MESES_ID[fecha.getMonth()]}_${fecha.getFullYear()}`;
+  return { mesId, wIdx, dIdx };
+}
+
+function hoyVp() {
+  return fechaAVp(new Date());
+}
+
+function vpVersiculoPath(mesId, wIdx, dIdx) {
+  return `vida_personal/${mesId}/semanas/semana_${wIdx+1}/dias/dia_${dIdx}`;
+}
+
+// ── Calcular racha de días consecutivos con al menos 1 hábito marcado ────────
+// Recorre hacia atrás desde hoy. Se detiene en el primer día sin registro o sin
+// ningún hábito del pilar marcado. Tope de búsqueda: 90 días, para no disparar
+// cientos de lecturas si nunca se registró nada.
+async function calcularRacha(pilarId) {
+  if (!firebaseOk) return 0;
+  let racha = 0;
+  let cursor = new Date();
+  for (let i = 0; i < 90; i++) {
+    const { mesId, wIdx, dIdx } = fechaAVp(cursor);
+    try {
+      const snap = await getDoc(doc(db, vpDayPath(mesId, wIdx, dIdx)));
+      if (!snap.exists()) break;
+      const pilares = snap.data().pilares || {};
+      const habitos = pilares[pilarId]?.habitos || {};
+      const comp = Object.values(habitos).filter(Boolean).length;
+      if (comp === 0) break;
+      racha++;
+      cursor.setDate(cursor.getDate() - 1);
+    } catch(e) { break; }
+  }
+  return racha;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // PANTALLA DE SELECCIÓN — 5 PILARES
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpSelector({ onSelect }) {
+function VpSelector({ onSelect, onSelectHoy }) {
   const [codigo, setCodigo] = useState("");
   const [err, setErr]       = useState("");
   const [scores, setScores] = useState({});
-  const [mesActual]         = useState(() => {
-    const d = new Date();
-    const m = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-    return `${m[d.getMonth()]}_${d.getFullYear()}`;
-  });
+  const [rachas, setRachas] = useState({});
+  const [mesActual]         = useState(() => hoyVp().mesId);
   const CODIGOS = { FE:"fe", TRADING:"trading", HOGAR:"hogar", FIT:"nutricion", VISION:"vision" };
 
   useEffect(() => {
@@ -543,6 +608,14 @@ function VpSelector({ onSelect }) {
       });
       setScores(final);
     });
+
+    // Calcular racha real de días consecutivos por pilar
+    Promise.all(VP_PILARES.map(p => calcularRacha(p.id).then(r => ({ id: p.id, r }))))
+      .then(results => {
+        const rmap = {};
+        results.forEach(({ id, r }) => { rmap[id] = r; });
+        setRachas(rmap);
+      });
   }, [mesActual]);
 
   function entrar() {
@@ -573,7 +646,7 @@ function VpSelector({ onSelect }) {
         backgroundSize:"36px 36px"}}/>
 
       {/* Header */}
-      <div style={{textAlign:"center",marginBottom:28,position:"relative"}}>
+      <div style={{textAlign:"center",marginBottom:20,position:"relative"}}>
         <div style={{width:1,height:36,background:`linear-gradient(to bottom,transparent,${G.gold})`,margin:"0 auto 12px"}}/>
         <div style={{fontSize:11,color:G.gold,letterSpacing:5,marginBottom:4}}>UN NUEVO COMIENZO</div>
         <div style={{fontSize:18,fontWeight:700,color:G.text,letterSpacing:2,marginBottom:2}}>
@@ -583,12 +656,28 @@ function VpSelector({ onSelect }) {
         <div style={{width:1,height:20,background:`linear-gradient(to bottom,${G.gold},transparent)`,margin:"12px auto 0"}}/>
       </div>
 
+      {/* Botón HOY — acceso directo al día actual sin navegar mes/semana */}
+      {onSelectHoy && (
+        <button onClick={onSelectHoy}
+          style={{
+            width:"100%", marginBottom:20, padding:"12px",
+            background:G.goldDim, border:`1px solid ${G.goldMid}`,
+            borderRadius:4, color:G.gold, fontSize:12, letterSpacing:3,
+            fontFamily:"'Courier New',monospace", fontWeight:700,
+            cursor:"pointer", touchAction:"manipulation",
+            WebkitTapHighlightColor:"transparent",
+          }}>
+          ⚡ IR A HOY
+        </button>
+      )}
+
       {/* Pilares */}
       {VP_PILARES.map(p => {
         const sc = scores[p.id];
         const pct = sc?.pct || 0;
         const cod = p.id==="nutricion"?"FIT":p.id.toUpperCase();
         const pctColor = pct===0?G.textDim:pct<50?"#C9724C":pct<80?G.gold:G.ok;
+        const racha = rachas[p.id] || 0;
         return (
           <div key={p.id} onClick={() => onSelect(p.id)}
             style={{borderRadius:4,marginBottom:6,cursor:"pointer",overflow:"hidden",
@@ -598,11 +687,23 @@ function VpSelector({ onSelect }) {
             onMouseOut={e=>{e.currentTarget.style.borderColor=`${p.color.border}33`;e.currentTarget.style.transform="none";}}>
 
             <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px 6px"}}>
-              {/* Icono */}
-              <div style={{width:34,height:34,borderRadius:3,flexShrink:0,display:"flex",
-                alignItems:"center",justifyContent:"center",fontSize:18,
-                border:`1px solid ${p.color.border}44`,background:`${p.color.border}11`}}>
-                {p.color.emoji}
+              {/* Icono con vela de racha */}
+              <div style={{position:"relative",flexShrink:0}}>
+                <div style={{width:34,height:34,borderRadius:3,display:"flex",
+                  alignItems:"center",justifyContent:"center",fontSize:18,
+                  border:`1px solid ${p.color.border}44`,background:`${p.color.border}11`}}>
+                  {p.color.emoji}
+                </div>
+                {racha > 0 && (
+                  <div title={`${racha} días consecutivos`}
+                    style={{position:"absolute",bottom:-6,right:-6,
+                      width:18,height:18,borderRadius:"50%",
+                      background:G.bg,border:`1px solid ${G.goldMid}`,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      boxShadow:`0 0 ${4+Math.min(8,racha)}px ${G.gold}`}}>
+                    <span style={{fontSize:9}}>🔥</span>
+                  </div>
+                )}
               </div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:12,fontWeight:600,color:p.color.text,letterSpacing:1,marginBottom:2}}>
@@ -634,6 +735,12 @@ function VpSelector({ onSelect }) {
                 <span style={{color:pctColor,fontWeight:600}}>{sc?.logrado||0}</span>
                 <span>/{sc?.total||0} hábitos</span>
               </div>
+              {racha>0&&(
+                <div style={{fontSize:10,color:G.textDim}}>
+                  <span style={{color:G.gold,fontWeight:600}}>🔥 {racha}</span>
+                  <span> {racha===1?"día":"días"} seguidos</span>
+                </div>
+              )}
               {sc?.diasCon>0&&(
                 <div style={{fontSize:10,color:G.textDim}}>
                   <span style={{color:p.color.text,fontWeight:600}}>{sc.diasCon}</span>
@@ -713,12 +820,17 @@ function VpPilarDia({ pilar, datos, onChange }) {
   const [tupper2,  setTupper2]  = useState(datos?.tupper2 || "cena_entreno");
   const [peso,     setPeso]     = useState(datos?.peso || "");
   const [wod,      setWod]      = useState(datos?.wod || "");
+  // trading extras
+  const [resultadoUSD, setResultadoUSD] = useState(datos?.resultadoUSD || "");
+  const [equityCuenta, setEquityCuenta] = useState(datos?.equityCuenta || "");
+  const [cantOperaciones, setCantOperaciones] = useState(datos?.cantOperaciones || "");
 
   useEffect(() => {
     const payload = { habitos, nota };
     if (pilar.esFitness) Object.assign(payload, { tipoDia, tupper1, tupper2, peso, wod });
+    if (pilar.esTrading) Object.assign(payload, { resultadoUSD, equityCuenta, cantOperaciones });
     onChange(payload);
-  }, [habitos, nota, tipoDia, tupper1, tupper2, peso, wod]);
+  }, [habitos, nota, tipoDia, tupper1, tupper2, peso, wod, resultadoUSD, equityCuenta, cantOperaciones]);
 
   function toggleH(id) { setHabitos(p => ({ ...p, [id]: !p[id] })); }
 
@@ -781,6 +893,44 @@ function VpPilarDia({ pilar, datos, onChange }) {
           placeholder="Escribí tu nota del día..."
           style={{...S.inp(false),height:72,resize:"none",fontFamily:"system-ui,sans-serif"}}/>
       </div>
+
+      {/* ── TRADING EXTRA ───────────────────────────────────────────────────── */}
+      {pilar.esTrading && (
+        <>
+          <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
+            <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>RESULTADO DEL DÍA</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+              <div>
+                <div style={{fontSize:10,color:G.textSec,marginBottom:4,fontFamily:"system-ui,sans-serif"}}>Resultado (USD)</div>
+                <input type="number" step="0.01" value={resultadoUSD}
+                  onChange={e=>setResultadoUSD(e.target.value)}
+                  placeholder="+0.00 / -0.00"
+                  style={{...S.inp(false),textAlign:"center",fontWeight:600,
+                    color: resultadoUSD==="" ? G.text : parseFloat(resultadoUSD)>=0 ? "#7AB85A" : "#C9724C"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:G.textSec,marginBottom:4,fontFamily:"system-ui,sans-serif"}}>Operaciones</div>
+                <input type="number" value={cantOperaciones}
+                  onChange={e=>setCantOperaciones(e.target.value)}
+                  placeholder="0"
+                  style={{...S.inp(false),textAlign:"center",fontWeight:600}}/>
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:G.textSec,marginBottom:4,fontFamily:"system-ui,sans-serif"}}>
+                Equity de la cuenta hoy (USD) — saldo total al cierre
+              </div>
+              <input type="number" step="0.01" value={equityCuenta}
+                onChange={e=>setEquityCuenta(e.target.value)}
+                placeholder="Ej: 10250.00"
+                style={{...S.inp(false),textAlign:"center",fontSize:16,fontWeight:700,color:G.gold}}/>
+              <div style={{fontSize:10,color:G.textDim,marginTop:5,fontFamily:"system-ui,sans-serif"}}>
+                Registrarlo todos los días construye tu curva de equity en el resumen mensual
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* ── FITNESS EXTRA ───────────────────────────────────────────────────── */}
       {pilar.esFitness && (
@@ -1267,8 +1417,10 @@ function VpResumenMensual({ mesId }) {
       const pilarStats = {};
       VP_PILARES.forEach(p => { pilarStats[p.id] = { logrado:0, total:0, dias:0 }; });
       const pesos = [];
+      const equity = []; // { dia: number, valor: number }
+      const resultados = [];
 
-      results.forEach(({ pilares }) => {
+      results.forEach(({ pilares }, idx) => {
         if (!pilares) return;
         VP_PILARES.forEach(p => {
           const h = pilares[p.id]?.habitos || {};
@@ -1278,9 +1430,13 @@ function VpResumenMensual({ mesId }) {
           pilarStats[p.id].dias++;
         });
         if (pilares.nutricion?.peso) pesos.push(parseFloat(pilares.nutricion.peso));
+        if (pilares.trading?.equityCuenta) equity.push({ idx, valor: parseFloat(pilares.trading.equityCuenta) });
+        if (pilares.trading?.resultadoUSD !== undefined && pilares.trading?.resultadoUSD !== "") {
+          resultados.push(parseFloat(pilares.trading.resultadoUSD));
+        }
       });
 
-      setData({ pilarStats, pesos });
+      setData({ pilarStats, pesos, equity, resultados });
       setLoading(false);
     });
   }, [mesId]);
@@ -1290,6 +1446,12 @@ function VpResumenMensual({ mesId }) {
   const pesoMin  = data.pesos.length ? Math.min(...data.pesos).toFixed(1) : null;
   const pesoMax  = data.pesos.length ? Math.max(...data.pesos).toFixed(1) : null;
   const pesoProm = data.pesos.length ? (data.pesos.reduce((a,b)=>a+b,0)/data.pesos.length).toFixed(1) : null;
+
+  const equitySorted = [...data.equity].sort((a,b)=>a.idx-b.idx);
+  const equityInicial = equitySorted.length ? equitySorted[0].valor : null;
+  const equityActual  = equitySorted.length ? equitySorted[equitySorted.length-1].valor : null;
+  const equityCambio  = (equityInicial!==null && equityActual!==null) ? (equityActual - equityInicial) : null;
+  const resultadoTotal = data.resultados.length ? data.resultados.reduce((a,b)=>a+b,0) : null;
 
   return (
     <div style={{marginTop:16}}>
@@ -1341,6 +1503,57 @@ function VpResumenMensual({ mesId }) {
           </div>
         </div>
       )}
+      {/* Evolución de cuenta de trading */}
+      {equityActual !== null && (
+        <div style={{border:"1px solid #7AB85A44",borderRadius:4,padding:"12px",
+          background:"#001a0f",marginTop:8}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#7AB85A",marginBottom:8,letterSpacing:1,fontFamily:"system-ui,sans-serif"}}>
+            📈 CUENTA DE TRADING — EVOLUCIÓN MENSUAL
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div style={{textAlign:"center",padding:"8px",background:G.surf2,
+              border:"1px solid #7AB85A44",borderRadius:3}}>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:4,fontFamily:"system-ui,sans-serif"}}>Equity actual</div>
+              <div style={{fontSize:16,fontWeight:700,color:"#7AB85A"}}>${equityActual.toFixed(2)}</div>
+            </div>
+            <div style={{textAlign:"center",padding:"8px",background:G.surf2,
+              border:"1px solid #7AB85A44",borderRadius:3}}>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:4,fontFamily:"system-ui,sans-serif"}}>Cambio en el mes</div>
+              <div style={{fontSize:16,fontWeight:700,color:equityCambio>=0?"#7AB85A":"#C9724C"}}>
+                {equityCambio>=0?"+":""}{equityCambio.toFixed(2)}
+              </div>
+            </div>
+          </div>
+          {resultadoTotal !== null && (
+            <div style={{fontSize:11,color:G.textSec,marginBottom:8,fontFamily:"system-ui,sans-serif"}}>
+              Resultado acumulado de operaciones registradas:{" "}
+              <span style={{fontWeight:700,color:resultadoTotal>=0?"#7AB85A":"#C9724C"}}>
+                {resultadoTotal>=0?"+":""}{resultadoTotal.toFixed(2)} USD
+              </span>
+            </div>
+          )}
+          {/* Mini gráfico de barras de equity por día registrado */}
+          {equitySorted.length > 1 && (() => {
+            const max = Math.max(...equitySorted.map(e=>e.valor));
+            const min = Math.min(...equitySorted.map(e=>e.valor));
+            const rango = max - min || 1;
+            return (
+              <div style={{display:"flex",gap:2,alignItems:"flex-end",height:40,marginTop:4}}>
+                {equitySorted.map((e,i) => {
+                  const h = Math.max(3, Math.round(((e.valor-min)/rango)*36));
+                  return (
+                    <div key={i} title={`$${e.valor.toFixed(2)}`}
+                      style={{flex:1,height:h,background:"#7AB85A",borderRadius:1,opacity:.7}}/>
+                  );
+                })}
+              </div>
+            );
+          })()}
+          <div style={{fontSize:10,color:"#7AB85A",marginTop:8,opacity:.75,fontFamily:"system-ui,sans-serif"}}>
+            {equitySorted.length} registros de equity en el mes
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1355,9 +1568,24 @@ function VpApp() {
   const [wIdx, setWIdx]   = useState(0);
   const [dIdx, setDIdx]   = useState(0);
 
+  function irAHoy(pilarId) {
+    const { mesId, wIdx: wHoy, dIdx: dHoy } = hoyVp();
+    const mes = ALL_MONTHS.find(m => m.id === mesId);
+    setPilarInicial(pilarId);
+    setSelectedMonth(mes || null);
+    setWIdx(wHoy);
+    setDIdx(dHoy);
+    setNav("day");
+  }
+
   // Mostrar selector si no hay pilar elegido
   if (!pilarInicial) {
-    return <VpSelector onSelect={p => setPilarInicial(p)} />;
+    return (
+      <VpSelector
+        onSelect={p => setPilarInicial(p)}
+        onSelectHoy={() => irAHoy("fe")}
+      />
+    );
   }
 
   const pilarActual = VP_PILARES.find(p => p.id === pilarInicial);
