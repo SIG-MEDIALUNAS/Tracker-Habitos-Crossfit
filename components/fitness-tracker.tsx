@@ -538,6 +538,18 @@ function vpVersiculoPath(mesId, wIdx, dIdx) {
   return `vida_personal/${mesId}/semanas/semana_${wIdx+1}/dias/dia_${dIdx}`;
 }
 
+// ── Lista de compras — transversal, no pertenece a un día ni a un pilar ──────
+function vpComprasPath() {
+  return `vida_personal/_compras/lista/actual`;
+}
+
+// ── Notas persistentes por pilar — viven fuera del día, no se pisan ─────────
+// Cada pilar tiene su propia colección de notas (texto + fecha), independiente
+// del registro diario de hábitos. Sirven para recordar cosas entre días.
+function vpNotasPath(pilarId) {
+  return `vida_personal/_notas/${pilarId}/lista`;
+}
+
 // ── Calcular racha de días consecutivos con al menos 1 hábito marcado ────────
 // Recorre hacia atrás desde hoy. Se detiene en el primer día sin registro o sin
 // ningún hábito del pilar marcado. Tope de búsqueda: 90 días, para no disparar
@@ -563,9 +575,326 @@ async function calcularRacha(pilarId) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// NOTAS PERSISTENTES POR PILAR — agregar, editar, eliminar. No se pisan entre días.
+// Viven en su propio documento Firebase (independiente del registro diario),
+// así que una nota de hace 3 semanas sigue ahí hasta que la borres a propósito.
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpNotasPilar({ pilar }) {
+  const c = pilar.color;
+  const [notas, setNotas]   = useState([]); // [{ id, texto, fecha }]
+  const [nuevo, setNuevo]   = useState("");
+  const [editId, setEditId] = useState(null);
+  const [editTxt, setEditTxt] = useState("");
+  const [abierto, setAbierto] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saveStatus, setSaveStatus] = useState("idle");
+
+  useEffect(() => {
+    if (!firebaseOk) { setLoading(false); return; }
+    getDoc(doc(db, vpNotasPath(pilar.id))).then(snap => {
+      setNotas(snap.exists() ? snap.data().notas || [] : []);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [pilar.id]);
+
+  async function persistir(nuevaLista) {
+    setNotas(nuevaLista);
+    if (!firebaseOk) return;
+    setSaveStatus("saving");
+    try {
+      await setDoc(doc(db, vpNotasPath(pilar.id)), { notas: nuevaLista });
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 1500);
+    } catch(e) { setSaveStatus("error"); }
+  }
+
+  function agregar() {
+    const texto = nuevo.trim();
+    if (!texto) return;
+    const item = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      texto,
+      fecha: new Date().toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"2-digit"}),
+    };
+    persistir([item, ...notas]); // más reciente arriba
+    setNuevo("");
+  }
+
+  function empezarEdicion(n) {
+    setEditId(n.id);
+    setEditTxt(n.texto);
+  }
+
+  function guardarEdicion() {
+    const texto = editTxt.trim();
+    if (!texto) { setEditId(null); return; }
+    persistir(notas.map(n => n.id===editId ? { ...n, texto } : n));
+    setEditId(null);
+  }
+
+  function eliminar(id) {
+    persistir(notas.filter(n => n.id !== id));
+    if (editId === id) setEditId(null);
+  }
+
+  return (
+    <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
+      <div onClick={() => setAbierto(v => !v)}
+        style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2}}>
+          NOTAS GUARDADAS {notas.length > 0 && `(${notas.length})`}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {saveStatus==="saving" && (
+            <span style={{fontSize:9,color:G.gold,letterSpacing:.5}}>GUARDANDO…</span>
+          )}
+          <span style={{fontSize:11,color:G.textDim,transform:abierto?"rotate(90deg)":"none",
+            transition:"transform .2s",display:"inline-block"}}>›</span>
+        </div>
+      </div>
+
+      {abierto && (
+        <div style={{marginTop:10}}>
+          {/* Agregar nota nueva */}
+          <div style={{display:"flex",gap:6,marginBottom:10}}>
+            <input value={nuevo} onChange={e=>setNuevo(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&agregar()}
+              placeholder="Nueva nota para recordar..."
+              style={{...S.inp(false),fontFamily:"system-ui,sans-serif"}}/>
+            <button onClick={agregar}
+              style={{padding:"8px 14px",borderRadius:3,background:c.dot,
+                border:"none",color:G.bg,fontSize:16,cursor:"pointer",fontWeight:700,lineHeight:1}}>
+              +
+            </button>
+          </div>
+
+          {loading ? (
+            <div style={{fontSize:10,color:G.textDim,textAlign:"center",padding:10,letterSpacing:1}}>
+              CARGANDO...
+            </div>
+          ) : notas.length === 0 ? (
+            <div style={{fontSize:11,color:G.textDim,textAlign:"center",padding:14,fontFamily:"system-ui,sans-serif"}}>
+              Sin notas guardadas todavía. Agregá la primera arriba.
+            </div>
+          ) : (
+            notas.map(n => (
+              <div key={n.id}
+                style={{border:`1px solid ${c.border}33`,borderRadius:3,padding:"9px 10px",
+                  marginBottom:5,background:c.bg}}>
+                {editId === n.id ? (
+                  <div>
+                    <textarea value={editTxt} onChange={e=>setEditTxt(e.target.value)}
+                      autoFocus
+                      style={{...S.inp(false),height:56,resize:"none",fontFamily:"system-ui,sans-serif",marginBottom:6}}/>
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={guardarEdicion}
+                        style={{flex:1,padding:"6px",borderRadius:3,background:c.dot,
+                          border:"none",color:G.bg,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+                        Guardar
+                      </button>
+                      <button onClick={()=>setEditId(null)}
+                        style={{flex:1,padding:"6px",borderRadius:3,background:G.surf2,
+                          border:`1px solid ${G.border}`,color:G.textSec,fontSize:11,cursor:"pointer"}}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12,color:c.text,lineHeight:1.5,fontFamily:"system-ui,sans-serif",
+                        wordBreak:"break-word"}}>
+                        {n.texto}
+                      </div>
+                      <div style={{fontSize:9,color:G.textDim,marginTop:4,letterSpacing:.5}}>
+                        {n.fecha}
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:4,flexShrink:0}}>
+                      <button onClick={()=>empezarEdicion(n)}
+                        style={{background:"none",border:"none",color:c.text,fontSize:13,
+                          cursor:"pointer",padding:"2px 4px",opacity:.7}}>
+                        ✎
+                      </button>
+                      <button onClick={()=>eliminar(n.id)}
+                        style={{background:"none",border:"none",color:G.textDim,fontSize:15,
+                          cursor:"pointer",padding:"2px 4px",lineHeight:1}}>
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LISTA DE COMPRAS — agregar, tachar, eliminar. Transversal a los 5 pilares.
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpListaCompras({ onBack }) {
+  const [items, setItems]   = useState([]); // [{ id, texto, comprado }]
+  const [nuevo, setNuevo]   = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saveStatus, setSaveStatus] = useState("idle");
+
+  useEffect(() => {
+    if (!firebaseOk) { setLoading(false); return; }
+    getDoc(doc(db, vpComprasPath())).then(snap => {
+      setItems(snap.exists() ? snap.data().items || [] : []);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  async function persistir(nuevaLista) {
+    setItems(nuevaLista);
+    if (!firebaseOk) return;
+    setSaveStatus("saving");
+    try {
+      await setDoc(doc(db, vpComprasPath()), { items: nuevaLista });
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 1500);
+    } catch(e) { setSaveStatus("error"); }
+  }
+
+  function agregar() {
+    const texto = nuevo.trim();
+    if (!texto) return;
+    const item = { id: `${Date.now()}_${Math.random().toString(36).slice(2,6)}`, texto, comprado:false };
+    persistir([...items, item]);
+    setNuevo("");
+  }
+
+  function toggleComprado(id) {
+    persistir(items.map(it => it.id===id ? { ...it, comprado: !it.comprado } : it));
+  }
+
+  function eliminar(id) {
+    persistir(items.filter(it => it.id !== id));
+  }
+
+  function limpiarComprados() {
+    persistir(items.filter(it => !it.comprado));
+  }
+
+  const pendientes = items.filter(it => !it.comprado).length;
+  const comprados  = items.filter(it => it.comprado).length;
+
+  return (
+    <div style={{minHeight:"100vh",background:G.bg,fontFamily:"system-ui,sans-serif",
+      padding:"24px 16px 56px",maxWidth:430,margin:"0 auto"}}>
+
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+        <button onClick={onBack} style={S.btn(false,false)}>← Pilares</button>
+        <div style={{flex:1,textAlign:"right"}}>
+          <span style={{fontSize:10,padding:"3px 8px",borderRadius:3,letterSpacing:.5,
+            background:saveStatus==="saving"?G.goldDim:saveStatus==="saved"?G.okBg:G.surf2,
+            color:saveStatus==="saving"?G.gold:saveStatus==="saved"?"#7AB85A":G.textDim,
+            border:`1px solid ${G.border}`}}>
+            {saveStatus==="saving"?"GUARDANDO…":saveStatus==="saved"?"✓ GUARDADO":"AUTO"}
+          </span>
+        </div>
+      </div>
+
+      <div style={{textAlign:"center",marginBottom:20}}>
+        <div style={{fontSize:28,marginBottom:6}}>🛒</div>
+        <div style={{fontSize:14,fontWeight:700,color:G.text,letterSpacing:1,fontFamily:"'Courier New',monospace"}}>
+          LISTA DE COMPRAS
+        </div>
+        <div style={{fontSize:11,color:G.textSec,marginTop:4}}>
+          {pendientes} pendiente{pendientes!==1?"s":""} · {comprados} comprado{comprados!==1?"s":""}
+        </div>
+      </div>
+
+      {/* Input agregar */}
+      <div style={{display:"flex",gap:6,marginBottom:16}}>
+        <input value={nuevo} onChange={e=>setNuevo(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&agregar()}
+          placeholder="Agregar producto..."
+          style={S.inp(false)}/>
+        <button onClick={agregar}
+          style={{padding:"8px 16px",borderRadius:3,background:G.gold,
+            border:"none",color:G.bg,fontSize:18,cursor:"pointer",fontWeight:700,
+            lineHeight:1}}>
+          +
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{textAlign:"center",color:G.textDim,fontSize:11,padding:20,letterSpacing:1,
+          fontFamily:"'Courier New',monospace"}}>CARGANDO...</div>
+      ) : items.length === 0 ? (
+        <div style={{textAlign:"center",color:G.textDim,fontSize:12,padding:30}}>
+          La lista está vacía. Agregá tu primer producto.
+        </div>
+      ) : (
+        <>
+          {/* Pendientes primero */}
+          {items.filter(it=>!it.comprado).map(it => (
+            <div key={it.id}
+              style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
+                border:`1px solid ${G.border}`,borderRadius:4,marginBottom:5,background:G.surf}}>
+              <div onClick={()=>toggleComprado(it.id)}
+                style={{width:18,height:18,borderRadius:2,flexShrink:0,cursor:"pointer",
+                  border:`1.5px solid ${G.textDim}`,background:"transparent"}}/>
+              <span style={{flex:1,fontSize:13,color:G.text}}>{it.texto}</span>
+              <button onClick={()=>eliminar(it.id)}
+                style={{background:"none",border:"none",color:G.textDim,fontSize:16,
+                  cursor:"pointer",padding:"0 4px",lineHeight:1}}>
+                ×
+              </button>
+            </div>
+          ))}
+
+          {/* Comprados — tachados */}
+          {comprados > 0 && (
+            <>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                margin:"16px 0 8px"}}>
+                <div style={{fontSize:9,color:G.textDim,letterSpacing:2}}>COMPRADOS</div>
+                <button onClick={limpiarComprados}
+                  style={{fontSize:10,color:G.textDim,background:"none",border:"none",
+                    cursor:"pointer",textDecoration:"underline",letterSpacing:.5}}>
+                  Limpiar comprados
+                </button>
+              </div>
+              {items.filter(it=>it.comprado).map(it => (
+                <div key={it.id}
+                  style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
+                    border:`1px solid ${G.border}`,borderRadius:4,marginBottom:5,
+                    background:G.surf2,opacity:.55}}>
+                  <div onClick={()=>toggleComprado(it.id)}
+                    style={{width:18,height:18,borderRadius:2,flexShrink:0,cursor:"pointer",
+                      border:`1.5px solid ${G.gold}`,background:G.gold,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:11,color:G.bg,fontWeight:700}}>✓</div>
+                  <span style={{flex:1,fontSize:13,color:G.textSec,textDecoration:"line-through"}}>
+                    {it.texto}
+                  </span>
+                  <button onClick={()=>eliminar(it.id)}
+                    style={{background:"none",border:"none",color:G.textDim,fontSize:16,
+                      cursor:"pointer",padding:"0 4px",lineHeight:1}}>
+                    ×
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // PANTALLA DE SELECCIÓN — 5 PILARES
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpSelector({ onSelect, onSelectHoy }) {
+function VpSelector({ onSelect, onSelectHoy, onSelectCompras }) {
   const [codigo, setCodigo] = useState("");
   const [err, setErr]       = useState("");
   const [scores, setScores] = useState({});
@@ -657,19 +986,34 @@ function VpSelector({ onSelect, onSelectHoy }) {
       </div>
 
       {/* Botón HOY — acceso directo al día actual sin navegar mes/semana */}
-      {onSelectHoy && (
-        <button onClick={onSelectHoy}
-          style={{
-            width:"100%", marginBottom:20, padding:"12px",
-            background:G.goldDim, border:`1px solid ${G.goldMid}`,
-            borderRadius:4, color:G.gold, fontSize:12, letterSpacing:3,
-            fontFamily:"'Courier New',monospace", fontWeight:700,
-            cursor:"pointer", touchAction:"manipulation",
-            WebkitTapHighlightColor:"transparent",
-          }}>
-          ⚡ IR A HOY
-        </button>
-      )}
+      <div style={{display:"flex",gap:8,marginBottom:20}}>
+        {onSelectHoy && (
+          <button onClick={onSelectHoy}
+            style={{
+              flex:1, padding:"12px",
+              background:G.goldDim, border:`1px solid ${G.goldMid}`,
+              borderRadius:4, color:G.gold, fontSize:11, letterSpacing:2,
+              fontFamily:"'Courier New',monospace", fontWeight:700,
+              cursor:"pointer", touchAction:"manipulation",
+              WebkitTapHighlightColor:"transparent",
+            }}>
+            ⚡ IR A HOY
+          </button>
+        )}
+        {onSelectCompras && (
+          <button onClick={onSelectCompras}
+            style={{
+              flex:1, padding:"12px",
+              background:G.surf, border:`1px solid ${G.border}`,
+              borderRadius:4, color:G.textSec, fontSize:11, letterSpacing:1,
+              fontFamily:"'Courier New',monospace", fontWeight:700,
+              cursor:"pointer", touchAction:"manipulation",
+              WebkitTapHighlightColor:"transparent",
+            }}>
+            🛒 COMPRAS
+          </button>
+        )}
+      </div>
 
       {/* Pilares */}
       {VP_PILARES.map(p => {
@@ -893,6 +1237,9 @@ function VpPilarDia({ pilar, datos, onChange }) {
           placeholder="Escribí tu nota del día..."
           style={{...S.inp(false),height:72,resize:"none",fontFamily:"system-ui,sans-serif"}}/>
       </div>
+
+      {/* Notas persistentes — biblioteca de recordatorios del pilar, no se pisan entre días */}
+      <VpNotasPilar pilar={pilar} />
 
       {/* ── TRADING EXTRA ───────────────────────────────────────────────────── */}
       {pilar.esTrading && (
@@ -1563,6 +1910,7 @@ function VpResumenMensual({ mesId }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 function VpApp() {
   const [pilarInicial, setPilarInicial] = useState(null);
+  const [mostrarCompras, setMostrarCompras] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [nav, setNav]     = useState("month"); // month | week | day
   const [wIdx, setWIdx]   = useState(0);
@@ -1578,12 +1926,18 @@ function VpApp() {
     setNav("day");
   }
 
+  // Lista de compras — pantalla independiente, transversal a los pilares
+  if (mostrarCompras) {
+    return <VpListaCompras onBack={() => setMostrarCompras(false)} />;
+  }
+
   // Mostrar selector si no hay pilar elegido
   if (!pilarInicial) {
     return (
       <VpSelector
         onSelect={p => setPilarInicial(p)}
         onSelectHoy={() => irAHoy("fe")}
+        onSelectCompras={() => setMostrarCompras(true)}
       />
     );
   }
