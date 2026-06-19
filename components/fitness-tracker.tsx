@@ -511,6 +511,112 @@ const VP_TUPPERS = {
 };
 const VP_DESAYUNO = { avena:70, leche:250, banana:120, huevos:3, kcal:520, prot:32 };
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// BASE DE EJERCICIOS — CrossFit (WOD) + Fuerza (rutina fija)
+// ═══════════════════════════════════════════════════════════════════════════════
+// tipo: "tiempo" (for time), "amrap" (rondas+reps), "fuerza" (peso x reps)
+const VP_EJERCICIOS_CROSSFIT = [
+  // Movimientos olímpicos / barra
+  { id:"clean",          label:"Clean",                 unidad:"kg" },
+  { id:"power_clean",    label:"Power Clean",            unidad:"kg" },
+  { id:"clean_jerk",     label:"Clean & Jerk",           unidad:"kg" },
+  { id:"snatch",         label:"Snatch",                 unidad:"kg" },
+  { id:"power_snatch",   label:"Power Snatch",           unidad:"kg" },
+  { id:"thruster",       label:"Thruster",                unidad:"kg" },
+  { id:"front_squat",    label:"Front Squat",             unidad:"kg" },
+  { id:"overhead_squat",  label:"Overhead Squat",          unidad:"kg" },
+  { id:"push_press",     label:"Push Press",               unidad:"kg" },
+  { id:"push_jerk",      label:"Push Jerk",                 unidad:"kg" },
+  { id:"deadlift",       label:"Deadlift",                   unidad:"kg" },
+  { id:"sumo_deadlift_hp",label:"Sumo Deadlift High Pull",     unidad:"kg" },
+  // Gimnásticos
+  { id:"pull_up",        label:"Pull-up",                unidad:"reps" },
+  { id:"chest_to_bar",   label:"Chest-to-Bar",           unidad:"reps" },
+  { id:"muscle_up",      label:"Muscle-up",              unidad:"reps" },
+  { id:"toes_to_bar",    label:"Toes-to-Bar",            unidad:"reps" },
+  { id:"push_up",        label:"Push-up",                unidad:"reps" },
+  { id:"hspu",           label:"Handstand Push-up",       unidad:"reps" },
+  { id:"handstand_walk", label:"Handstand Walk",         unidad:"m" },
+  { id:"ring_dip",       label:"Ring Dip",                unidad:"reps" },
+  { id:"pistol",         label:"Pistol Squat",           unidad:"reps" },
+  { id:"burpee",         label:"Burpee",                  unidad:"reps" },
+  { id:"burpee_box_jump",label:"Burpee Box Jump-over",     unidad:"reps" },
+  { id:"box_jump",       label:"Box Jump",                unidad:"reps" },
+  { id:"wall_ball",      label:"Wall Ball",               unidad:"kg" },
+  { id:"kb_swing",       label:"KB Swing",                unidad:"kg" },
+  { id:"double_under",   label:"Double Under",            unidad:"reps" },
+  { id:"row",            label:"Row (cal/m)",             unidad:"cal" },
+  { id:"bike",           label:"Bike (cal)",              unidad:"cal" },
+  { id:"run",            label:"Run",                     unidad:"m" },
+  { id:"air_squat",      label:"Air Squat",               unidad:"reps" },
+  { id:"sit_up",         label:"Sit-up",                  unidad:"reps" },
+  { id:"gtoh",           label:"Ground to Overhead",      unidad:"kg" },
+  // WODs nombrados (benchmarks clásicos)
+  { id:"wod_fran",       label:"Fran (21-15-9 Thruster/Pull-up)", unidad:"tiempo" },
+  { id:"wod_grace",      label:"Grace (30 Clean & Jerk)",         unidad:"tiempo" },
+  { id:"wod_helen",      label:"Helen (3RD Run/KB/Pull-up)",      unidad:"tiempo" },
+  { id:"wod_diane",      label:"Diane (21-15-9 Deadlift/HSPU)",   unidad:"tiempo" },
+  { id:"wod_amanda",     label:"Amanda (9-7-5 MU/Snatch)",        unidad:"tiempo" },
+  { id:"wod_murph",      label:"Murph (Run+Pull/Push/Squat+Run)", unidad:"tiempo" },
+  { id:"wod_cindy",      label:"Cindy (AMRAP Pull/Push/Squat)",   unidad:"amrap" },
+  { id:"wod_mary",       label:"Mary (AMRAP HSPU/Pistol/Pull-up)",unidad:"amrap" },
+  { id:"otro_wod",       label:"Otro WOD / personalizado",        unidad:"libre" },
+];
+
+const VP_EJERCICIOS_FUERZA = [
+  { id:"sentadilla",       label:"Sentadilla (Back Squat)",  unidad:"kg" },
+  { id:"sentadilla_frontal",label:"Sentadilla Frontal",       unidad:"kg" },
+  { id:"press_banca",      label:"Press de Banca",           unidad:"kg" },
+  { id:"press_militar",    label:"Press Militar",            unidad:"kg" },
+  { id:"peso_muerto",      label:"Peso Muerto",               unidad:"kg" },
+  { id:"peso_muerto_rumano",label:"Peso Muerto Rumano",        unidad:"kg" },
+  { id:"remo_barra",       label:"Remo con Barra",            unidad:"kg" },
+  { id:"dominadas_lastre", label:"Dominadas con Lastre",       unidad:"kg" },
+  { id:"hip_thrust",       label:"Hip Thrust",                 unidad:"kg" },
+  { id:"zancadas",         label:"Zancadas (Lunges)",          unidad:"kg" },
+];
+
+// ── Paths Firestore — registros y logros (globales, no atados a un día) ──────
+function vpEjercicioPath(ejercicioId) {
+  return `vida_personal/_ejercicios/historial/${ejercicioId}`;
+}
+function vpLogrosPath() {
+  return `vida_personal/_logros/lista/actual`;
+}
+
+// ── Trofeos — catálogo visual por categoría ───────────────────────────────────
+const VP_TROFEOS = {
+  peso:    { emoji:"🏆", color:"#C9A84C", label:"Récord de Peso" },
+  tiempo:  { emoji:"⏱️", color:"#6FA3D4", label:"Récord de Tiempo" },
+  reps:    { emoji:"🔥", color:"#C9724C", label:"Récord de Reps" },
+  rondas:  { emoji:"🌀", color:"#A07AC9", label:"Récord de Rondas" },
+  fe:      { emoji:"✝️", color:"#C9A84C", label:"Hito de Fe" },
+  manual:  { emoji:"⭐", color:"#7AB85A", label:"Logro Personal" },
+};
+
+// Convierte "MM:SS" a segundos para comparar tiempos (menor = mejor)
+function vpTiempoASegundos(str) {
+  if (!str) return null;
+  const m = str.match(/^(\d+):(\d{1,2})$/);
+  if (m) return parseInt(m[1])*60 + parseInt(m[2]);
+  const n = parseFloat(str);
+  return isNaN(n) ? null : n;
+}
+
+// Compara marca nueva vs mejor histórica y determina si es PR
+// tipoMejor: "mayor" (peso/reps/rondas, más es mejor) o "menor" (tiempo, menos es mejor)
+function vpEsRecordPersonal(valorNuevo, mejorAnterior, tipoMejor) {
+  if (valorNuevo == null || isNaN(valorNuevo)) return false;
+  if (mejorAnterior == null) return true; // primera carga = siempre logro
+  return tipoMejor === "menor" ? valorNuevo < mejorAnterior : valorNuevo > mejorAnterior;
+}
+
+function vpFormatoFechaHora(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString("es-AR",{day:"2-digit",month:"short",year:"numeric"}) +
+    " · " + d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"});
+}
+
 function vpDayPath(mesId, wIdx, dIdx) {
   return `vida_personal/${mesId}/semanas/semana_${wIdx+1}/dias/dia_${dIdx}`;
 }
@@ -741,6 +847,7 @@ const VP_SECTORES_COMPRA = [
   { id:"verduleria",   label:"Verdulería",    emoji:"🥦", color:"#7AB85A" },
   { id:"carniceria",   label:"Carnicería",    emoji:"🥩", color:"#C9724C" },
   { id:"supermercado", label:"Supermercado",  emoji:"🛒", color:"#6FA3D4" },
+  { id:"auto",         label:"Auto",          emoji:"🚗", color:"#A07AC9" },
   { id:"pendientes",   label:"Pendientes",    emoji:"📌", color:"#C9A84C" },
 ];
 
@@ -887,7 +994,7 @@ function VpListaCompras({ onBack }) {
               borderRadius:3,marginBottom:3,cursor:"pointer",
               border:`1px solid ${s.color}22`,background:`${s.color}11`}}>
             <span style={{fontSize:9,color:G.textDim,width:14,textAlign:"center",
-              fontFamily:"'Courier New',monospace"}}>{["I","II","III","IV"][i]}</span>
+              fontFamily:"'Courier New',monospace"}}>{["I","II","III","IV","V"][i]}</span>
             <span style={{fontSize:14}}>{s.emoji}</span>
             <span style={{flex:1,fontSize:11,color:G.textSec}}>{s.label}</span>
             {s.pend>0 && (
@@ -1024,7 +1131,7 @@ function VpListaCompras({ onBack }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // PANTALLA DE SELECCIÓN — 5 PILARES
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpSelector({ onSelect, onSelectHoy, onSelectCompras }) {
+function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros }) {
   const [codigo, setCodigo] = useState("");
   const [err, setErr]       = useState("");
   const [scores, setScores] = useState({});
@@ -1116,26 +1223,26 @@ function VpSelector({ onSelect, onSelectHoy, onSelectCompras }) {
       </div>
 
       {/* Botón HOY — acceso directo al día actual sin navegar mes/semana */}
-      <div style={{display:"flex",gap:8,marginBottom:20}}>
+      <div style={{display:"flex",gap:6,marginBottom:20}}>
         {onSelectHoy && (
           <button onClick={onSelectHoy}
             style={{
-              flex:1, padding:"12px",
+              flex:1, padding:"12px 6px",
               background:G.goldDim, border:`1px solid ${G.goldMid}`,
-              borderRadius:4, color:G.gold, fontSize:11, letterSpacing:2,
+              borderRadius:4, color:G.gold, fontSize:10, letterSpacing:1,
               fontFamily:"'Courier New',monospace", fontWeight:700,
               cursor:"pointer", touchAction:"manipulation",
               WebkitTapHighlightColor:"transparent",
             }}>
-            ⚡ IR A HOY
+            ⚡ HOY
           </button>
         )}
         {onSelectCompras && (
           <button onClick={onSelectCompras}
             style={{
-              flex:1, padding:"12px",
+              flex:1, padding:"12px 6px",
               background:G.surf, border:`1px solid ${G.border}`,
-              borderRadius:4, color:G.textSec, fontSize:11, letterSpacing:1,
+              borderRadius:4, color:G.textSec, fontSize:10, letterSpacing:1,
               fontFamily:"'Courier New',monospace", fontWeight:700,
               cursor:"pointer", touchAction:"manipulation",
               WebkitTapHighlightColor:"transparent",
@@ -1143,7 +1250,21 @@ function VpSelector({ onSelect, onSelectHoy, onSelectCompras }) {
             🛒 COMPRAS
           </button>
         )}
+        {onSelectLogros && (
+          <button onClick={onSelectLogros}
+            style={{
+              flex:1, padding:"12px 6px",
+              background:G.surf, border:`1px solid ${G.border}`,
+              borderRadius:4, color:G.textSec, fontSize:10, letterSpacing:1,
+              fontFamily:"'Courier New',monospace", fontWeight:700,
+              cursor:"pointer", touchAction:"manipulation",
+              WebkitTapHighlightColor:"transparent",
+            }}>
+            🏆 TROFEOS
+          </button>
+        )}
       </div>
+
 
       {/* Pilares */}
       {VP_PILARES.map(p => {
@@ -1283,6 +1404,345 @@ function VpSelector({ onSelect, onSelectHoy, onSelectCompras }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// REGISTRO DE EJERCICIO — carga marca, detecta PR automático, permite marcar manual
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpRegistroEjercicio({ baseEjercicios, onLogroNuevo }) {
+  const [ejercicioId, setEjercicioId] = useState(baseEjercicios[0]?.id || "");
+  const [reps, setReps]     = useState("");
+  const [kg, setKg]         = useState("");
+  const [rondas, setRondas] = useState("");
+  const [tiempo, setTiempo] = useState(""); // "MM:SS"
+  const [notaLibre, setNotaLibre] = useState("");
+  const [forzarLogro, setForzarLogro] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [ultimoResultado, setUltimoResultado] = useState(null); // {esPR, trofeo}
+
+  const ejercicio = baseEjercicios.find(e => e.id === ejercicioId);
+
+  async function registrar() {
+    if (!ejercicio) return;
+    setGuardando(true);
+    const path = vpEjercicioPath(ejercicioId);
+
+    let historial = [];
+    if (firebaseOk) {
+      try {
+        const snap = await getDoc(doc(db, path));
+        historial = snap.exists() ? snap.data().marcas || [] : [];
+      } catch(e) {}
+    }
+
+    // Determinar valor relevante según unidad del ejercicio
+    const esTiempo = ejercicio.unidad === "tiempo";
+    const esAmrap  = ejercicio.unidad === "amrap";
+    const valorPeso   = kg ? parseFloat(kg.replace(",",".")) : null;
+    const valorReps   = reps ? parseInt(reps) : null;
+    const valorRondas = rondas ? parseInt(rondas) : null;
+    const valorTiempoSeg = vpTiempoASegundos(tiempo);
+
+    // Mejores marcas anteriores por tipo
+    const mejorPesoAnt   = historial.filter(h=>h.kg!=null).reduce((m,h)=>Math.max(m??-Infinity,h.kg),null);
+    const mejorRepsAnt   = historial.filter(h=>h.reps!=null).reduce((m,h)=>Math.max(m??-Infinity,h.reps),null);
+    const mejorRondasAnt = historial.filter(h=>h.rondas!=null).reduce((m,h)=>Math.max(m??-Infinity,h.rondas),null);
+    const mejorTiempoAnt = historial.filter(h=>h.tiempoSeg!=null).reduce((m,h)=>Math.min(m??Infinity,h.tiempoSeg),null);
+
+    const prPeso   = valorPeso!=null   && vpEsRecordPersonal(valorPeso, mejorPesoAnt, "mayor");
+    const prReps   = valorReps!=null   && vpEsRecordPersonal(valorReps, mejorRepsAnt, "mayor");
+    const prRondas = valorRondas!=null && vpEsRecordPersonal(valorRondas, mejorRondasAnt, "mayor");
+    const prTiempo = valorTiempoSeg!=null && vpEsRecordPersonal(valorTiempoSeg, mejorTiempoAnt, "menor");
+
+    const esPR = prPeso || prReps || prRondas || prTiempo || forzarLogro;
+
+    const marca = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      fecha: Date.now(),
+      kg: valorPeso, reps: valorReps, rondas: valorRondas,
+      tiempo: tiempo || null, tiempoSeg: valorTiempoSeg,
+      nota: notaLibre || null, esPR, manual: forzarLogro,
+    };
+
+    historial = [...historial, marca];
+    if (firebaseOk) {
+      try { await setDoc(doc(db, path), { marcas: historial }); } catch(e) {}
+    }
+
+    // Si es PR, registrar logro/trofeo
+    if (esPR) {
+      let tipoTrofeo = "manual";
+      if (prPeso) tipoTrofeo = "peso";
+      else if (prTiempo) tipoTrofeo = "tiempo";
+      else if (prRondas) tipoTrofeo = "rondas";
+      else if (prReps) tipoTrofeo = "reps";
+
+      const detalle = [
+        valorPeso!=null?`${valorPeso}kg`:null,
+        valorReps!=null?`${valorReps} reps`:null,
+        valorRondas!=null?`${valorRondas} rondas`:null,
+        tiempo?`${tiempo}`:null,
+      ].filter(Boolean).join(" · ");
+
+      const logro = {
+        id: `${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+        fecha: Date.now(),
+        ejercicioId, ejercicioLabel: ejercicio.label,
+        tipo: tipoTrofeo, detalle,
+        manual: forzarLogro && !(prPeso||prReps||prRondas||prTiempo),
+      };
+
+      if (firebaseOk) {
+        try {
+          const snapL = await getDoc(doc(db, vpLogrosPath()));
+          const logrosAct = snapL.exists() ? snapL.data().items || [] : [];
+          await setDoc(doc(db, vpLogrosPath()), { items: [...logrosAct, logro] });
+        } catch(e) {}
+      }
+      onLogroNuevo?.(logro);
+    }
+
+    setUltimoResultado({ esPR, ejercicio: ejercicio.label });
+    setReps(""); setKg(""); setRondas(""); setTiempo(""); setNotaLibre(""); setForzarLogro(false);
+    setGuardando(false);
+    setTimeout(()=>setUltimoResultado(null), 4000);
+  }
+
+  return (
+    <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
+      <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>REGISTRAR EJERCICIO</div>
+
+      <select value={ejercicioId} onChange={e=>setEjercicioId(e.target.value)}
+        style={{...S.inp(false),marginBottom:8,cursor:"pointer"}}>
+        {baseEjercicios.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+      </select>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+        <div>
+          <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>KG</div>
+          <input value={kg} onChange={e=>setKg(e.target.value)} placeholder="0" type="text" inputMode="decimal"
+            style={{...S.inp(false),textAlign:"center"}}/>
+        </div>
+        <div>
+          <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>REPS</div>
+          <input value={reps} onChange={e=>setReps(e.target.value)} placeholder="0" type="text" inputMode="numeric"
+            style={{...S.inp(false),textAlign:"center"}}/>
+        </div>
+        <div>
+          <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>RONDAS</div>
+          <input value={rondas} onChange={e=>setRondas(e.target.value)} placeholder="0" type="text" inputMode="numeric"
+            style={{...S.inp(false),textAlign:"center"}}/>
+        </div>
+        <div>
+          <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>TIEMPO (MM:SS)</div>
+          <input value={tiempo} onChange={e=>setTiempo(e.target.value)} placeholder="8:42"
+            style={{...S.inp(false),textAlign:"center"}}/>
+        </div>
+      </div>
+
+      <input value={notaLibre} onChange={e=>setNotaLibre(e.target.value)}
+        placeholder="Nota (RX, escalado, sensación...)"
+        style={{...S.inp(false),marginBottom:8,fontSize:12}}/>
+
+      <div onClick={()=>setForzarLogro(v=>!v)}
+        style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",marginBottom:8,
+          border:`1px solid ${forzarLogro?G.gold:G.border}`,borderRadius:3,cursor:"pointer",
+          background:forzarLogro?G.goldDim:G.surf2}}>
+        <div style={{width:16,height:16,borderRadius:2,flexShrink:0,display:"flex",
+          alignItems:"center",justifyContent:"center",fontSize:10,
+          border:`1.5px solid ${forzarLogro?G.gold:G.textDim}`,
+          background:forzarLogro?G.gold:"transparent",color:G.bg,fontWeight:700}}>
+          {forzarLogro&&"✓"}
+        </div>
+        <span style={{fontSize:11,color:forzarLogro?G.gold:G.textSec}}>
+          ⭐ Marcar como logro manual (aunque no sea PR automático)
+        </span>
+      </div>
+
+      <button onClick={registrar} disabled={guardando}
+        style={{width:"100%",padding:"10px",borderRadius:3,background:G.gold,
+          border:"none",color:G.bg,fontSize:12,fontWeight:700,letterSpacing:1,
+          cursor:guardando?"default":"pointer",opacity:guardando?.6:1}}>
+        {guardando?"GUARDANDO…":"REGISTRAR MARCA"}
+      </button>
+
+      {ultimoResultado && (
+        <div style={{marginTop:10,padding:"10px",borderRadius:3,textAlign:"center",
+          border:`1px solid ${ultimoResultado.esPR?G.gold:G.border}`,
+          background:ultimoResultado.esPR?G.goldDim:G.surf2,
+          animation:ultimoResultado.esPR?"none":"none"}}>
+          {ultimoResultado.esPR ? (
+            <div style={{fontSize:12,color:G.gold,fontWeight:700}}>
+              🏆 ¡SUPERACIÓN PERSONAL! · {ultimoResultado.ejercicio}
+            </div>
+          ) : (
+            <div style={{fontSize:11,color:G.textSec}}>Marca registrada · {ultimoResultado.ejercicio}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PANTALLA DE LOGROS — Trofeos, hitos con fecha/hora, ramas por categoría
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpLogrosScreen({ onBack }) {
+  const [logros, setLogros] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filtro, setFiltro] = useState("todos");
+  const [nuevoTexto, setNuevoTexto] = useState("");
+  const [mostrarAgregar, setMostrarAgregar] = useState(false);
+
+  useEffect(() => {
+    if (!firebaseOk) { setLoading(false); return; }
+    getDoc(doc(db, vpLogrosPath())).then(snap => {
+      setLogros(snap.exists() ? (snap.data().items || []).sort((a,b)=>b.fecha-a.fecha) : []);
+      setLoading(false);
+    }).catch(()=>setLoading(false));
+  }, []);
+
+  async function agregarLogroLibre() {
+    const texto = nuevoTexto.trim();
+    if (!texto) return;
+    const logro = {
+      id:`${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      fecha:Date.now(), ejercicioId:null, ejercicioLabel:null,
+      tipo:"manual", detalle:texto, manual:true,
+    };
+    const nuevos = [logro, ...logros];
+    setLogros(nuevos);
+    setNuevoTexto(""); setMostrarAgregar(false);
+    if (firebaseOk) {
+      try { await setDoc(doc(db, vpLogrosPath()), { items: nuevos }); } catch(e) {}
+    }
+  }
+
+  async function eliminarLogro(id) {
+    const nuevos = logros.filter(l=>l.id!==id);
+    setLogros(nuevos);
+    if (firebaseOk) {
+      try { await setDoc(doc(db, vpLogrosPath()), { items: nuevos }); } catch(e) {}
+    }
+  }
+
+  const categorias = [
+    { id:"todos",  label:"Todos", emoji:"🏆" },
+    { id:"peso",   label:"Peso",  emoji:"🏆" },
+    { id:"tiempo", label:"Tiempo",emoji:"⏱️" },
+    { id:"reps",   label:"Reps",  emoji:"🔥" },
+    { id:"rondas", label:"Rondas",emoji:"🌀" },
+    { id:"manual", label:"Personal",emoji:"⭐" },
+  ];
+
+  const logrosFiltrados = filtro==="todos" ? logros : logros.filter(l=>l.tipo===filtro);
+
+  // Conteo por categoría para el resumen
+  const conteos = {};
+  Object.keys(VP_TROFEOS).forEach(k => { conteos[k] = logros.filter(l=>l.tipo===k).length; });
+
+  return (
+    <div style={{minHeight:"100vh",background:G.bg,fontFamily:"system-ui,sans-serif",
+      padding:"24px 16px 56px",maxWidth:430,margin:"0 auto"}}>
+
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+        <button onClick={onBack} style={S.btn(false,false)}>← Pilares</button>
+      </div>
+
+      <div style={{textAlign:"center",marginBottom:20}}>
+        <div style={{fontSize:30,marginBottom:6}}>🏆</div>
+        <div style={{fontSize:14,fontWeight:700,color:G.gold,letterSpacing:2,fontFamily:"'Courier New',monospace"}}>
+          MIS TROFEOS
+        </div>
+        <div style={{fontSize:10,color:G.textDim,marginTop:4,letterSpacing:1}}>
+          "NO COMPITO CON NADIE MÁS, SOLO CONMIGO MISMO"
+        </div>
+      </div>
+
+      {/* Resumen por rama */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,marginBottom:16}}>
+        {Object.entries(VP_TROFEOS).filter(([k])=>k!=="fe").map(([k,t]) => (
+          <div key={k} style={{border:`1px solid ${t.color}33`,borderRadius:4,padding:"10px 6px",
+            background:`${t.color}11`,textAlign:"center"}}>
+            <div style={{fontSize:18,marginBottom:3}}>{t.emoji}</div>
+            <div style={{fontSize:16,fontWeight:700,color:t.color}}>{conteos[k]||0}</div>
+            <div style={{fontSize:8,color:G.textDim,letterSpacing:.5,marginTop:2}}>{t.label.toUpperCase()}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tabs filtro */}
+      <div style={{display:"flex",gap:4,marginBottom:14,overflowX:"auto"}}>
+        {categorias.map(c => {
+          const active = filtro===c.id;
+          return (
+            <button key={c.id} onClick={()=>setFiltro(c.id)}
+              style={{whiteSpace:"nowrap",padding:"6px 10px",fontSize:11,cursor:"pointer",
+                border:`1px solid ${active?G.gold:G.border}`,borderRadius:3,
+                background:active?G.goldDim:G.surf2,
+                color:active?G.gold:G.textSec,fontWeight:active?600:400}}>
+              {c.emoji} {c.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Botón agregar logro libre */}
+      {!mostrarAgregar ? (
+        <button onClick={()=>setMostrarAgregar(true)}
+          style={{width:"100%",padding:"10px",marginBottom:14,borderRadius:3,
+            border:`1px dashed ${G.border}`,background:"transparent",
+            color:G.textSec,fontSize:11,cursor:"pointer"}}>
+          + Agregar logro personal (no físico)
+        </button>
+      ) : (
+        <div style={{border:`1px solid ${G.gold}`,borderRadius:4,padding:"10px",marginBottom:14,background:G.surf}}>
+          <textarea value={nuevoTexto} onChange={e=>setNuevoTexto(e.target.value)}
+            placeholder='Ej: "Hoy recibí el Espíritu Santo, nuevamente bautizado"'
+            style={{...S.inp(false),height:60,resize:"none",marginBottom:8}}/>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={agregarLogroLibre}
+              style={{flex:1,padding:"8px",borderRadius:3,background:G.gold,border:"none",
+                color:G.bg,fontSize:11,fontWeight:700,cursor:"pointer"}}>GUARDAR</button>
+            <button onClick={()=>{setMostrarAgregar(false);setNuevoTexto("");}}
+              style={{flex:1,padding:"8px",borderRadius:3,background:G.surf2,
+                border:`1px solid ${G.border}`,color:G.textSec,fontSize:11,cursor:"pointer"}}>CANCELAR</button>
+          </div>
+        </div>
+      )}
+
+      {/* Línea de tiempo de logros */}
+      {loading ? (
+        <div style={{textAlign:"center",color:G.textDim,fontSize:11,padding:20,letterSpacing:1,
+          fontFamily:"'Courier New',monospace"}}>CARGANDO TROFEOS...</div>
+      ) : logrosFiltrados.length===0 ? (
+        <div style={{textAlign:"center",color:G.textDim,fontSize:12,padding:30}}>
+          Todavía no hay trofeos en esta rama.<br/>Cada superación va a quedar registrada aquí.
+        </div>
+      ) : (
+        logrosFiltrados.map(l => {
+          const t = VP_TROFEOS[l.tipo] || VP_TROFEOS.manual;
+          return (
+            <div key={l.id} style={{display:"flex",gap:10,marginBottom:10,
+              border:`1px solid ${t.color}33`,borderRadius:4,padding:"12px",background:`${t.color}0d`}}>
+              <div style={{fontSize:24,flexShrink:0}}>{t.emoji}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,color:t.color,marginBottom:2}}>
+                  {l.ejercicioLabel || "Logro Personal"}
+                  {l.manual && <span style={{fontSize:9,marginLeft:6,color:G.textDim}}>(manual)</span>}
+                </div>
+                <div style={{fontSize:12,color:G.text,marginBottom:4}}>{l.detalle}</div>
+                <div style={{fontSize:10,color:G.textDim,letterSpacing:.5}}>{vpFormatoFechaHora(l.fecha)}</div>
+              </div>
+              <button onClick={()=>eliminarLogro(l.id)}
+                style={{background:"none",border:"none",color:G.textDim,fontSize:14,
+                  cursor:"pointer",padding:"0 2px",alignSelf:"flex-start"}}>×</button>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // REGISTRO DIARIO DE UN PILAR
 // ═══════════════════════════════════════════════════════════════════════════════
 function VpPilarDia({ pilar, datos, onChange }) {
@@ -1298,15 +1758,40 @@ function VpPilarDia({ pilar, datos, onChange }) {
   const [resultadoUSD, setResultadoUSD] = useState(datos?.resultadoUSD || "");
   const [equityCuenta, setEquityCuenta] = useState(datos?.equityCuenta || "");
   const [cantOperaciones, setCantOperaciones] = useState(datos?.cantOperaciones || "");
+  // control de sincronización — evita pisar datos reales con un guardado prematuro
+  const [listo, setListo] = useState(false);
+  const datosRef = useRef(null);
+
+  // Si "datos" llega o cambia desde afuera (ej: Firebase respondió después del montaje),
+  // sincronizamos el estado local UNA SOLA VEZ por cada "datos" distinto que llegue,
+  // así nunca pisamos con el valor inicial vacío.
+  useEffect(() => {
+    if (datos !== datosRef.current) {
+      datosRef.current = datos;
+      setHabitos(datos?.habitos || {});
+      setNota(datos?.nota || "");
+      setTipoDia(datos?.tipoDia || "entreno");
+      setTupper1(datos?.tupper1 || "base");
+      setTupper2(datos?.tupper2 || "cena_entreno");
+      setPeso(datos?.peso || "");
+      setWod(datos?.wod || "");
+      setResultadoUSD(datos?.resultadoUSD || "");
+      setEquityCuenta(datos?.equityCuenta || "");
+      setCantOperaciones(datos?.cantOperaciones || "");
+      setListo(true);
+    }
+  }, [datos]);
 
   useEffect(() => {
+    if (!listo) return; // no guardar hasta que el estado esté sincronizado con datos reales
     const payload = { habitos, nota };
     if (pilar.esFitness) Object.assign(payload, { tipoDia, tupper1, tupper2, peso, wod });
     if (pilar.esTrading) Object.assign(payload, { resultadoUSD, equityCuenta, cantOperaciones });
     onChange(payload);
-  }, [habitos, nota, tipoDia, tupper1, tupper2, peso, wod, resultadoUSD, equityCuenta, cantOperaciones]);
+  }, [listo, habitos, nota, tipoDia, tupper1, tupper2, peso, wod, resultadoUSD, equityCuenta, cantOperaciones]);
 
   function toggleH(id) { setHabitos(p => ({ ...p, [id]: !p[id] })); }
+
 
   const completados = pilar.habitos.filter(h => habitos[h.id]).length;
   const pct = Math.round((completados / pilar.habitos.length) * 100);
@@ -1429,15 +1914,25 @@ function VpPilarDia({ pilar, datos, onChange }) {
             </div>
           </div>
 
-          {/* WOD */}
+          {/* WOD — descripción libre + registro estructurado */}
           {tipoDia==="entreno"&&(
-            <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
-              <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6}}>WOD DEL DÍA</div>
-              <textarea value={wod} onChange={e=>setWod(e.target.value)}
-                placeholder="Ej: Fran 21-15-9 · Tiempo: 8:42"
-                style={{...S.inp(false),height:52,resize:"none",fontFamily:"system-ui,sans-serif"}}/>
-            </div>
+            <>
+              <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
+                <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6}}>WOD DEL DÍA</div>
+                <textarea value={wod} onChange={e=>setWod(e.target.value)}
+                  placeholder="Ej: Fran 21-15-9 Thruster/Pull-up · RX"
+                  style={{...S.inp(false),height:52,resize:"none",fontFamily:"system-ui,sans-serif"}}/>
+              </div>
+
+              <VpRegistroEjercicio baseEjercicios={VP_EJERCICIOS_CROSSFIT} />
+
+              <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
+                <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>FUERZA — RUTINA</div>
+                <VpRegistroEjercicio baseEjercicios={VP_EJERCICIOS_FUERZA} />
+              </div>
+            </>
           )}
+
 
           {/* Desayuno fijo */}
           <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
@@ -2041,6 +2536,7 @@ function VpResumenMensual({ mesId }) {
 function VpApp() {
   const [pilarInicial, setPilarInicial] = useState(null);
   const [mostrarCompras, setMostrarCompras] = useState(false);
+  const [mostrarLogros, setMostrarLogros]   = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [nav, setNav]     = useState("month"); // month | week | day
   const [wIdx, setWIdx]   = useState(0);
@@ -2061,6 +2557,11 @@ function VpApp() {
     return <VpListaCompras onBack={() => setMostrarCompras(false)} />;
   }
 
+  // Trofeos / logros — pantalla independiente, transversal a los pilares
+  if (mostrarLogros) {
+    return <VpLogrosScreen onBack={() => setMostrarLogros(false)} />;
+  }
+
   // Mostrar selector si no hay pilar elegido
   if (!pilarInicial) {
     return (
@@ -2068,6 +2569,7 @@ function VpApp() {
         onSelect={p => setPilarInicial(p)}
         onSelectHoy={() => irAHoy("fe")}
         onSelectCompras={() => setMostrarCompras(true)}
+        onSelectLogros={() => setMostrarLogros(true)}
       />
     );
   }
