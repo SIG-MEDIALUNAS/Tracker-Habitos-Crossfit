@@ -736,9 +736,30 @@ function VpNotasPilar({ pilar }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // LISTA DE COMPRAS — agregar, tachar, eliminar. Transversal a los 5 pilares.
 // ═══════════════════════════════════════════════════════════════════════════════
+// ── Sectores de compras ────────────────────────────────────────────────────
+const VP_SECTORES_COMPRA = [
+  { id:"verduleria",   label:"Verdulería",    emoji:"🥦", color:"#7AB85A" },
+  { id:"carniceria",   label:"Carnicería",    emoji:"🥩", color:"#C9724C" },
+  { id:"supermercado", label:"Supermercado",  emoji:"🛒", color:"#6FA3D4" },
+  { id:"pendientes",   label:"Pendientes",    emoji:"📌", color:"#C9A84C" },
+];
+
+function vpSemanaActual() {
+  const d = new Date();
+  const ini = new Date(d); ini.setDate(d.getDate() - d.getDay());
+  ini.setHours(0,0,0,0);
+  return ini.getTime();
+}
+function vpMesActualTs() {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+}
+
 function VpListaCompras({ onBack }) {
-  const [items, setItems]   = useState([]); // [{ id, texto, comprado }]
-  const [nuevo, setNuevo]   = useState("");
+  const [items, setItems]     = useState([]); // [{ id, texto, monto, sector, comprado, fechaComprado }]
+  const [nuevo, setNuevo]     = useState("");
+  const [montoNuevo, setMontoNuevo] = useState("");
+  const [sectorActivo, setSectorActivo] = useState("verduleria");
   const [loading, setLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState("idle");
 
@@ -764,25 +785,61 @@ function VpListaCompras({ onBack }) {
   function agregar() {
     const texto = nuevo.trim();
     if (!texto) return;
-    const item = { id: `${Date.now()}_${Math.random().toString(36).slice(2,6)}`, texto, comprado:false };
+    const monto = montoNuevo.trim() ? parseFloat(montoNuevo.replace(",",".")) : null;
+    const item = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      texto, monto: (monto && !isNaN(monto)) ? monto : null,
+      sector: sectorActivo, comprado:false, fechaComprado:null,
+    };
     persistir([...items, item]);
-    setNuevo("");
+    setNuevo(""); setMontoNuevo("");
   }
 
   function toggleComprado(id) {
-    persistir(items.map(it => it.id===id ? { ...it, comprado: !it.comprado } : it));
+    persistir(items.map(it => it.id===id
+      ? { ...it, comprado: !it.comprado, fechaComprado: !it.comprado ? Date.now() : null }
+      : it));
   }
 
   function eliminar(id) {
     persistir(items.filter(it => it.id !== id));
   }
 
-  function limpiarComprados() {
-    persistir(items.filter(it => !it.comprado));
+  function limpiarComprados(sectorId) {
+    persistir(items.filter(it => !(it.comprado && it.sector===sectorId)));
   }
 
-  const pendientes = items.filter(it => !it.comprado).length;
-  const comprados  = items.filter(it => it.comprado).length;
+  function editarMonto(id, valor) {
+    const monto = valor.trim() ? parseFloat(valor.replace(",",".")) : null;
+    persistir(items.map(it => it.id===id
+      ? { ...it, monto:(monto&&!isNaN(monto))?monto:null }
+      : it));
+  }
+
+  const itemsSector = items.filter(it => it.sector === sectorActivo);
+  const pendientesSector = itemsSector.filter(it => !it.comprado);
+  const compradosSector  = itemsSector.filter(it => it.comprado);
+  const totalSector = compradosSector.reduce((a,it)=>a+(it.monto||0),0);
+
+  // KPIs globales
+  const inicioSemana = vpSemanaActual();
+  const inicioMes    = vpMesActualTs();
+  const totalSemanal = items
+    .filter(it => it.comprado && it.fechaComprado && it.fechaComprado >= inicioSemana)
+    .reduce((a,it)=>a+(it.monto||0),0);
+  const totalMensual = items
+    .filter(it => it.comprado && it.fechaComprado && it.fechaComprado >= inicioMes)
+    .reduce((a,it)=>a+(it.monto||0),0);
+
+  // Ranking por sector — total comprado por sector (todo el tiempo)
+  const rankingSectores = VP_SECTORES_COMPRA.map(s => {
+    const itsS = items.filter(it => it.sector===s.id && it.comprado);
+    const total = itsS.reduce((a,it)=>a+(it.monto||0),0);
+    const pend  = items.filter(it=>it.sector===s.id && !it.comprado).length;
+    return { ...s, total, pend, count: itsS.length };
+  }).sort((a,b)=>b.total-a.total);
+
+  const fmt = n => n.toLocaleString("es-AR",{minimumFractionDigits:0,maximumFractionDigits:2});
 
   return (
     <div style={{minHeight:"100vh",background:G.bg,fontFamily:"system-ui,sans-serif",
@@ -801,41 +858,103 @@ function VpListaCompras({ onBack }) {
         </div>
       </div>
 
-      <div style={{textAlign:"center",marginBottom:20}}>
+      <div style={{textAlign:"center",marginBottom:16}}>
         <div style={{fontSize:28,marginBottom:6}}>🛒</div>
         <div style={{fontSize:14,fontWeight:700,color:G.text,letterSpacing:1,fontFamily:"'Courier New',monospace"}}>
           LISTA DE COMPRAS
         </div>
-        <div style={{fontSize:11,color:G.textSec,marginTop:4}}>
-          {pendientes} pendiente{pendientes!==1?"s":""} · {comprados} comprado{comprados!==1?"s":""}
+      </div>
+
+      {/* KPIs semanal / mensual */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
+        <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,textAlign:"center"}}>
+          <div style={{fontSize:9,color:G.textDim,letterSpacing:1,marginBottom:4}}>GASTO SEMANAL</div>
+          <div style={{fontSize:18,fontWeight:700,color:G.gold}}>${fmt(totalSemanal)}</div>
+        </div>
+        <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,textAlign:"center"}}>
+          <div style={{fontSize:9,color:G.textDim,letterSpacing:1,marginBottom:4}}>GASTO MENSUAL</div>
+          <div style={{fontSize:18,fontWeight:700,color:G.gold}}>${fmt(totalMensual)}</div>
         </div>
       </div>
 
-      {/* Input agregar */}
-      <div style={{display:"flex",gap:6,marginBottom:16}}>
+      {/* Ranking de sectores (estilo KPI) */}
+      <div style={{border:`1px solid ${G.border}`,borderRadius:4,background:G.surf,
+        padding:"12px",marginBottom:16}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:10}}>RANKING POR SECTOR</div>
+        {rankingSectores.map((s,i) => (
+          <div key={s.id} onClick={()=>setSectorActivo(s.id)}
+            style={{display:"flex",alignItems:"center",gap:8,padding:"7px 8px",
+              borderRadius:3,marginBottom:3,cursor:"pointer",
+              border:`1px solid ${s.color}22`,background:`${s.color}11`}}>
+            <span style={{fontSize:9,color:G.textDim,width:14,textAlign:"center",
+              fontFamily:"'Courier New',monospace"}}>{["I","II","III","IV"][i]}</span>
+            <span style={{fontSize:14}}>{s.emoji}</span>
+            <span style={{flex:1,fontSize:11,color:G.textSec}}>{s.label}</span>
+            {s.pend>0 && (
+              <span style={{fontSize:9,color:G.textDim}}>{s.pend} pend.</span>
+            )}
+            <span style={{fontSize:12,fontWeight:700,color:s.color,minWidth:60,textAlign:"right"}}>
+              ${fmt(s.total)}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Tabs de sectores */}
+      <div style={{display:"flex",gap:4,marginBottom:12,overflowX:"auto"}}>
+        {VP_SECTORES_COMPRA.map(s => {
+          const active = sectorActivo===s.id;
+          return (
+            <button key={s.id} onClick={()=>setSectorActivo(s.id)}
+              style={{flex:1,whiteSpace:"nowrap",padding:"8px 6px",fontSize:11,cursor:"pointer",
+                border:`1px solid ${active?s.color:G.border}`,borderRadius:4,
+                background:active?`${s.color}18`:G.surf2,
+                color:active?s.color:G.textSec,fontWeight:active?600:400}}>
+              {s.emoji} {s.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Input agregar — producto + monto en el mismo renglón */}
+      <div style={{display:"flex",gap:6,marginBottom:10}}>
         <input value={nuevo} onChange={e=>setNuevo(e.target.value)}
           onKeyDown={e=>e.key==="Enter"&&agregar()}
-          placeholder="Agregar producto..."
-          style={S.inp(false)}/>
+          placeholder={`Agregar a ${VP_SECTORES_COMPRA.find(s=>s.id===sectorActivo)?.label}...`}
+          style={{...S.inp(false),flex:2}}/>
+        <input value={montoNuevo} onChange={e=>setMontoNuevo(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&agregar()}
+          placeholder="$" type="text" inputMode="decimal"
+          style={{...S.inp(false),flex:1,textAlign:"right"}}/>
         <button onClick={agregar}
-          style={{padding:"8px 16px",borderRadius:3,background:G.gold,
+          style={{padding:"8px 14px",borderRadius:3,background:G.gold,
             border:"none",color:G.bg,fontSize:18,cursor:"pointer",fontWeight:700,
             lineHeight:1}}>
           +
         </button>
       </div>
 
+      {/* Total del sector activo */}
+      {compradosSector.length > 0 && (
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"8px 12px",marginBottom:10,border:`1px solid ${G.border}`,borderRadius:4,
+          background:G.surf2}}>
+          <span style={{fontSize:11,color:G.textSec}}>Total comprado en este sector</span>
+          <span style={{fontSize:14,fontWeight:700,color:G.gold}}>${fmt(totalSector)}</span>
+        </div>
+      )}
+
       {loading ? (
         <div style={{textAlign:"center",color:G.textDim,fontSize:11,padding:20,letterSpacing:1,
           fontFamily:"'Courier New',monospace"}}>CARGANDO...</div>
-      ) : items.length === 0 ? (
+      ) : itemsSector.length === 0 ? (
         <div style={{textAlign:"center",color:G.textDim,fontSize:12,padding:30}}>
-          La lista está vacía. Agregá tu primer producto.
+          Sin productos en este sector. Agregá el primero.
         </div>
       ) : (
         <>
           {/* Pendientes primero */}
-          {items.filter(it=>!it.comprado).map(it => (
+          {pendientesSector.map(it => (
             <div key={it.id}
               style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
                 border:`1px solid ${G.border}`,borderRadius:4,marginBottom:5,background:G.surf}}>
@@ -843,6 +962,14 @@ function VpListaCompras({ onBack }) {
                 style={{width:18,height:18,borderRadius:2,flexShrink:0,cursor:"pointer",
                   border:`1.5px solid ${G.textDim}`,background:"transparent"}}/>
               <span style={{flex:1,fontSize:13,color:G.text}}>{it.texto}</span>
+              <input
+                defaultValue={it.monto ?? ""}
+                onBlur={e=>editarMonto(it.id, e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter"){ editarMonto(it.id, e.target.value); e.target.blur(); }}}
+                placeholder="$" type="text" inputMode="decimal"
+                style={{width:64,fontSize:12,padding:"4px 6px",textAlign:"right",
+                  border:`1px solid ${G.border}`,borderRadius:3,background:G.surf2,
+                  color:G.gold,outline:"none",fontFamily:"inherit"}}/>
               <button onClick={()=>eliminar(it.id)}
                 style={{background:"none",border:"none",color:G.textDim,fontSize:16,
                   cursor:"pointer",padding:"0 4px",lineHeight:1}}>
@@ -852,22 +979,22 @@ function VpListaCompras({ onBack }) {
           ))}
 
           {/* Comprados — tachados */}
-          {comprados > 0 && (
+          {compradosSector.length > 0 && (
             <>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
                 margin:"16px 0 8px"}}>
                 <div style={{fontSize:9,color:G.textDim,letterSpacing:2}}>COMPRADOS</div>
-                <button onClick={limpiarComprados}
+                <button onClick={()=>limpiarComprados(sectorActivo)}
                   style={{fontSize:10,color:G.textDim,background:"none",border:"none",
                     cursor:"pointer",textDecoration:"underline",letterSpacing:.5}}>
                   Limpiar comprados
                 </button>
               </div>
-              {items.filter(it=>it.comprado).map(it => (
+              {compradosSector.map(it => (
                 <div key={it.id}
                   style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
                     border:`1px solid ${G.border}`,borderRadius:4,marginBottom:5,
-                    background:G.surf2,opacity:.55}}>
+                    background:G.surf2,opacity:.6}}>
                   <div onClick={()=>toggleComprado(it.id)}
                     style={{width:18,height:18,borderRadius:2,flexShrink:0,cursor:"pointer",
                       border:`1.5px solid ${G.gold}`,background:G.gold,
@@ -876,6 +1003,9 @@ function VpListaCompras({ onBack }) {
                   <span style={{flex:1,fontSize:13,color:G.textSec,textDecoration:"line-through"}}>
                     {it.texto}
                   </span>
+                  {it.monto!=null && (
+                    <span style={{fontSize:12,color:G.gold,fontWeight:600}}>${fmt(it.monto)}</span>
+                  )}
                   <button onClick={()=>eliminar(it.id)}
                     style={{background:"none",border:"none",color:G.textDim,fontSize:16,
                       cursor:"pointer",padding:"0 4px",lineHeight:1}}>
