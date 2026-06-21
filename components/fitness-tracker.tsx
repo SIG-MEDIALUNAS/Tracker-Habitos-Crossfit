@@ -269,7 +269,7 @@ function LoginScreen({ onLogin }) {
 
         {/* Línea inferior */}
         <div style={{position:"absolute", bottom:24, fontSize:9, color:"#333", letterSpacing:2}}>
-          UN NUEVO COMIENZO · TAPAS 2 · 14.06.2026
+          UN NUEVO COMIENZO · TAPAS 1 · 14.06.2026
         </div>
       </div>
     );
@@ -439,7 +439,7 @@ function LoginScreen({ onLogin }) {
             fontSize:9, color:"#333", letterSpacing:3,
             marginTop:20, textAlign:"center",
           }}>
-            UN NUEVO COMIENZO · TAPAS 2
+            UN NUEVO COMIENZO · TAPAS 1
           </div>
         </div>
       </div>
@@ -470,7 +470,7 @@ const VP_C = {
 const VP_PILARES = [
   { id:"fe", label:"Fe & Propósito", color:VP_C.fe, habitos:[
     { id:"jarvis",    label:"Jarvis Wake Up completado" },
-    { id:"versiculo", label:"Meditación Salmos 119:97" },
+    { id:"versiculo", label:"Meditación en la palabra del señor" },
     { id:"intencion", label:"Intención del día definida" },
   ], notaLabel:"Palabra o frase de meditación de hoy" },
 
