@@ -663,6 +663,11 @@ function vpRecetasPath() {
   return `vida_personal/_recetas/lista/actual`;
 }
 
+// ── Tuppers preparados — historial de lo que salió de Cocina, listo para comer ──
+function vpTuppersPreparadosPath() {
+  return `vida_personal/_tuppers/preparados/actual`;
+}
+
 // Unidades de medida disponibles para Stock/Compras
 const VP_UNIDADES = [
   { id:"kg", label:"Kg" },
@@ -679,6 +684,101 @@ function vpNormalizarNombre(texto) {
 // Sectores de compra que efectivamente alimentan el Stock de alimentos
 // (Auto y Pendientes no son comida, así que no impactan en Stock/Nutrición)
 const VP_SECTORES_ALIMENTO = ["verduleria","carniceria","supermercado"];
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TABLA NUTRICIONAL BASE — valores por 100g en crudo/fresco
+// Fuente: TABLA_NUTRICIONAL.xlsx (plan nutricional personal)
+// Se usa para auto-calcular kcal/carbs/prot/grasas de cualquier receta
+// ═══════════════════════════════════════════════════════════════════════════════
+const VP_TABLA_NUTRICIONAL = [
+  { nombre:"Pechuga de Pollo (sin piel)", prot:23,   kcal:110, carbs:0,    grasas:1  },
+  { nombre:"Lomo / Solomillo Vacuno",      prot:22,   kcal:135, carbs:0,    grasas:5  },
+  { nombre:"Lomo de Cerdo",                prot:22,   kcal:145, carbs:0,    grasas:6  },
+  { nombre:"Solomillo de Cerdo",           prot:21,   kcal:120, carbs:0,    grasas:4  },
+  { nombre:"Carne picada (magra 5%)",      prot:21,   kcal:150, carbs:0,    grasas:5  },
+  { nombre:"Pechuga de Pollo (con piel)",  prot:20,   kcal:170, carbs:0,    grasas:9  },
+  { nombre:"Bife de Chorizo / Entrecot",   prot:20,   kcal:220, carbs:0,    grasas:15 },
+  { nombre:"Muslo de Pollo (sin piel)",    prot:19,   kcal:160, carbs:0,    grasas:9  },
+  { nombre:"Chuleta de Cerdo",             prot:19,   kcal:200, carbs:0,    grasas:12 },
+  { nombre:"Alitas de Pollo (con piel)",   prot:18,   kcal:200, carbs:0,    grasas:15 },
+  { nombre:"Tira de asado / Costilla",     prot:17,   kcal:280, carbs:0,    grasas:25 },
+  { nombre:"Huevo",                        prot:13,   kcal:155, carbs:0,    grasas:11 },
+  { nombre:"Panceta / Tocino",             prot:9,    kcal:540, carbs:0,    grasas:50 },
+  { nombre:"Champiñones / Setas",          prot:3.1,  kcal:22,  carbs:3,    grasas:0  },
+  { nombre:"Espinacas",                    prot:2.9,  kcal:23,  carbs:3.6,  grasas:0  },
+  { nombre:"Brócoli",                      prot:2.8,  kcal:34,  carbs:7,    grasas:0  },
+  { nombre:"Espárragos",                   prot:2.2,  kcal:20,  carbs:4,    grasas:0  },
+  { nombre:"Papa",                         prot:2.0,  kcal:77,  carbs:17,   grasas:0  },
+  { nombre:"Coliflor",                     prot:1.9,  kcal:25,  carbs:5,    grasas:0  },
+  { nombre:"Zapallito verde (Calabacín)",  prot:1.2,  kcal:17,  carbs:3,    grasas:0  },
+  { nombre:"Cebolla",                      prot:1.1,  kcal:40,  carbs:9,    grasas:0  },
+  { nombre:"Morrón (Pimiento)",            prot:1.0,  kcal:20,  carbs:5,    grasas:0  },
+  { nombre:"Banana",                       prot:1.1,  kcal:89,  carbs:23,   grasas:0  },
+  { nombre:"Naranja",                      prot:0.9,  kcal:47,  carbs:12,   grasas:0  },
+  { nombre:"Frutillas (Fresas)",           prot:0.7,  kcal:32,  carbs:8,    grasas:0  },
+  { nombre:"Pera",                         prot:0.4,  kcal:57,  carbs:15,   grasas:0  },
+  { nombre:"Manzana",                      prot:0.3,  kcal:52,  carbs:14,   grasas:0  },
+  // Adicionales del sistema de tuppers (no estaban en la tabla, valores estándar)
+  { nombre:"Avena",                        prot:13,   kcal:389, carbs:66,   grasas:7  },
+  { nombre:"Leche entera",                 prot:3.2,  kcal:61,  carbs:4.8,  grasas:3.3},
+  { nombre:"Verduras mix",                 prot:2,    kcal:30,  carbs:5,    grasas:0  },
+];
+
+// Sinónimos comunes para mejorar el matching (clave: lo que escribís → valor: nombre en la tabla)
+const VP_SINONIMOS_NUTRICION = {
+  "pollo":"Pechuga de Pollo (sin piel)", "pechuga de pollo":"Pechuga de Pollo (sin piel)",
+  "carne":"Lomo / Solomillo Vacuno", "carne picada":"Carne picada (magra 5%)",
+  "huevos":"Huevo", "huevo":"Huevo",
+  "papa":"Papa", "papas":"Papa", "patata":"Papa", "patatas":"Papa",
+  "verdura":"Verduras mix", "verduras":"Verduras mix",
+  "banana":"Banana", "bananas":"Banana",
+  "avena":"Avena",
+  "leche":"Leche entera",
+  "cebolla":"Cebolla", "cebollas":"Cebolla",
+  "morron":"Morrón (Pimiento)", "morrón":"Morrón (Pimiento)", "pimiento":"Morrón (Pimiento)",
+  "brocoli":"Brócoli", "brócoli":"Brócoli",
+};
+
+// Busca el alimento más parecido en la tabla nutricional (match exacto → sinónimo → substring)
+function vpBuscarAlimento(nombreIngrediente) {
+  const key = vpNormalizarNombre(nombreIngrediente);
+  // 1. Match exacto
+  let match = VP_TABLA_NUTRICIONAL.find(a => vpNormalizarNombre(a.nombre)===key);
+  if (match) return match;
+  // 2. Sinónimo directo
+  if (VP_SINONIMOS_NUTRICION[key]) {
+    match = VP_TABLA_NUTRICIONAL.find(a => a.nombre===VP_SINONIMOS_NUTRICION[key]);
+    if (match) return match;
+  }
+  // 3. Substring — el ingrediente contiene o está contenido en el nombre de la tabla
+  match = VP_TABLA_NUTRICIONAL.find(a => {
+    const an = vpNormalizarNombre(a.nombre);
+    return an.includes(key) || key.includes(an.split(" (")[0]);
+  });
+  return match || null;
+}
+
+// Calcula la info nutricional de un ingrediente según su cantidad real (no 100g)
+// unidad "kg" → cantidad en kg, se convierte a gramos para el cálculo (base es por 100g)
+// unidad "u" → unidad, intenta asumir un peso promedio razonable; "lts" → asume como kg
+function vpCalcularNutricionIngrediente(nombreIngrediente, cantidad, unidad) {
+  const alimento = vpBuscarAlimento(nombreIngrediente);
+  if (!alimento || cantidad == null) return null;
+
+  let gramos;
+  if (unidad === "kg" || unidad === "lts") gramos = cantidad * 1000;
+  else gramos = cantidad * 100; // unidades sueltas (ej: huevos) — aproximación 100g c/u
+
+  const factor = gramos / 100;
+  return {
+    kcal: alimento.kcal * factor,
+    carbs: alimento.carbs * factor,
+    prot: alimento.prot * factor,
+    grasas: alimento.grasas * factor,
+    encontrado: true,
+    alimentoUsado: alimento.nombre,
+  };
+}
 
 // ── Notas persistentes por pilar — viven fuera del día, no se pisan ─────────
 // Cada pilar tiene su propia colección de notas (texto + fecha), independiente
@@ -1449,7 +1549,36 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
   const [archivo, setArchivo] = useState(null);
   const [procesando, setProcesando] = useState(false);
   const [errorIA, setErrorIA] = useState("");
+  const [nutricionManual, setNutricionManual] = useState(!!recetaInicial); // si ya tenía datos, no auto-sobreescribir
   const fileInputRef = useRef(null);
+
+  // Auto-cálculo: cada vez que cambian los ingredientes, recalculamos la nutrición total
+  // sumando lo que reconocemos en la tabla nutricional. No pisa valores si el usuario
+  // ya tocó los campos manualmente (nutricionManual=true).
+  const nutricionCalculada = ingredientes.reduce((acc, ing) => {
+    if (!ing.nombre.trim() || !ing.cantidad) return acc;
+    const cant = parseFloat(String(ing.cantidad).replace(",","."));
+    if (isNaN(cant)) return acc;
+    const calc = vpCalcularNutricionIngrediente(ing.nombre, cant, ing.unidad);
+    if (!calc) return acc;
+    return {
+      kcal: acc.kcal + calc.kcal, carbs: acc.carbs + calc.carbs,
+      prot: acc.prot + calc.prot, grasas: acc.grasas + calc.grasas,
+      reconocidos: acc.reconocidos + 1,
+    };
+  }, { kcal:0, carbs:0, prot:0, grasas:0, reconocidos:0 });
+
+  const ingredientesConNombre = ingredientes.filter(i=>i.nombre.trim()).length;
+  const todosReconocidos = ingredientesConNombre > 0 && nutricionCalculada.reconocidos === ingredientesConNombre;
+
+  useEffect(() => {
+    if (nutricionManual) return; // el usuario ya editó a mano, no lo pisamos
+    if (nutricionCalculada.reconocidos === 0) return;
+    setKcal(String(Math.round(nutricionCalculada.kcal)));
+    setCarbs(String(Math.round(nutricionCalculada.carbs)));
+    setProt(String(Math.round(nutricionCalculada.prot)));
+    setGrasas(String(Math.round(nutricionCalculada.grasas)));
+  }, [JSON.stringify(ingredientes)]);
 
   function agregarIngrediente() {
     setIngredientes([...ingredientes, {nombre:"",cantidad:"",unidad:"kg"}]);
@@ -1515,6 +1644,7 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
       setCarbs(String(parsed.nutricion?.carbs??""));
       setProt(String(parsed.nutricion?.prot??""));
       setGrasas(String(parsed.nutricion?.grasas??""));
+      setNutricionManual(true);
     } catch(e) {
       setErrorIA("No se pudo procesar el archivo automáticamente. Cargá los datos manualmente abajo.");
     } finally {
@@ -1596,13 +1726,36 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
         + Agregar ingrediente
       </button>
 
-      <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6}}>INFO NUTRICIONAL (TOTAL DE LA RECETA)</div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2}}>INFO NUTRICIONAL (TOTAL DE LA RECETA)</div>
+        {nutricionManual && nutricionCalculada.reconocidos>0 && (
+          <button onClick={()=>setNutricionManual(false)}
+            style={{fontSize:9,color:G.textDim,background:"none",border:"none",
+              cursor:"pointer",textDecoration:"underline"}}>
+            recalcular automático
+          </button>
+        )}
+      </div>
+      {ingredientesConNombre > 0 && (
+        <div style={{fontSize:10,marginBottom:8,padding:"6px 10px",borderRadius:3,
+          background: todosReconocidos ? G.okBg : nutricionCalculada.reconocidos>0 ? G.goldDim : "#1a050008",
+          color: todosReconocidos ? "#7AB85A" : nutricionCalculada.reconocidos>0 ? G.gold : "#C9724C",
+          border:`1px solid ${todosReconocidos?"#5C8A4A55":nutricionCalculada.reconocidos>0?G.goldMid:"#C9724C44"}`}}>
+          {todosReconocidos
+            ? `✓ ${nutricionCalculada.reconocidos}/${ingredientesConNombre} ingredientes calculados automáticamente`
+            : nutricionCalculada.reconocidos>0
+              ? `${nutricionCalculada.reconocidos}/${ingredientesConNombre} ingredientes reconocidos · revisá los demás manualmente`
+              : `Ningún ingrediente coincide con la base nutricional · cargá los valores manualmente`
+          }
+        </div>
+      )}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:12}}>
         {[["Kcal",kcal,setKcal],["Carbohidratos (g)",carbs,setCarbs],
           ["Proteína (g)",prot,setProt],["Grasas (g)",grasas,setGrasas]].map(([lbl,val,setter])=>(
           <div key={lbl}>
             <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>{lbl.toUpperCase()}</div>
-            <input value={val} onChange={e=>setter(e.target.value)} type="text" inputMode="decimal"
+            <input value={val} onChange={e=>{setter(e.target.value);setNutricionManual(true);}}
+              type="text" inputMode="decimal"
               style={{...S.inp(false),textAlign:"center"}}/>
           </div>
         ))}
@@ -1727,6 +1880,7 @@ function VpRecetasScreen({ onBack, onUsarReceta }) {
 function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion }) {
   const [receta, setReceta] = useState(recetaSeleccionada || null);
   const [porcionesDeseadas, setPorcionesDeseadas] = useState(String(recetaSeleccionada?.porcionesBase || 4));
+  const [cantTuppers, setCantTuppers] = useState(String(recetaSeleccionada?.porcionesBase || 4));
   const [stock, setStock] = useState([]);
   const [loading, setLoading] = useState(true);
   const [descontado, setDescontado] = useState(false);
@@ -1743,6 +1897,7 @@ function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion
     if (recetaSeleccionada) {
       setReceta(recetaSeleccionada);
       setPorcionesDeseadas(String(recetaSeleccionada.porcionesBase || 4));
+      setCantTuppers(String(recetaSeleccionada.porcionesBase || 4));
       setDescontado(false);
     }
   }, [recetaSeleccionada]);
@@ -1773,6 +1928,7 @@ function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion
   }
 
   const porciones = parseFloat(porcionesDeseadas) || 0;
+  const tuppers = parseInt(cantTuppers) || 1;
   const factor = receta.porcionesBase > 0 ? porciones / receta.porcionesBase : 0;
 
   const nutricionTotal = {
@@ -1787,6 +1943,20 @@ function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion
     prot: nutricionTotal.prot / porciones,
     grasas: nutricionTotal.grasas / porciones,
   } : { kcal:0, carbs:0, prot:0, grasas:0 };
+
+  // Reparto por tupper — divide la nutrición total y cada ingrediente entre la cantidad de tuppers
+  const nutricionPorTupper = tuppers > 0 ? {
+    kcal: nutricionTotal.kcal / tuppers,
+    carbs: nutricionTotal.carbs / tuppers,
+    prot: nutricionTotal.prot / tuppers,
+    grasas: nutricionTotal.grasas / tuppers,
+  } : { kcal:0, carbs:0, prot:0, grasas:0 };
+
+  const ingredientesPorTupper = receta.ingredientes.map(ing => ({
+    nombre: ing.nombre,
+    cantidad: tuppers > 0 ? (ing.cantidad * factor) / tuppers : 0,
+    unidad: ing.unidad,
+  }));
 
   // Verificación contra Stock — cuánto necesito vs cuánto tengo
   const verificacion = receta.ingredientes.map(ing => {
@@ -1812,6 +1982,23 @@ function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion
     });
     setStock(nuevoStock);
     try { await setDoc(doc(db, vpStockPath()), { items: nuevoStock }); } catch(e) {}
+
+    // Guardamos el resultado de cocinar — qué tuppers quedaron listos, con su info,
+    // para poder verlos después desde el registro diario de Nutrición.
+    // Se agrega al historial consolidado de tuppers preparados (no se pisa lo anterior).
+    if (firebaseOk) {
+      try {
+        const snapT = await getDoc(doc(db, vpTuppersPreparadosPath()));
+        const preparadosAct = snapT.exists() ? snapT.data().items || [] : [];
+        const nuevoTupperLote = {
+          id: `${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+          recetaNombre: receta.nombre, porciones, cantTuppers: tuppers,
+          nutricionPorTupper, ingredientesPorTupper, fecha: Date.now(), consumidos: 0,
+        };
+        await setDoc(doc(db, vpTuppersPreparadosPath()), { items: [...preparadosAct, nuevoTupperLote] });
+      } catch(e) {}
+    }
+
     setDescontado(true);
   }
 
@@ -1832,7 +2019,7 @@ function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion
       </div>
 
       {/* Selector de porciones */}
-      <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:14}}>
+      <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:8}}>
         <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>PORCIONES A COCINAR</div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <button onClick={()=>setPorcionesDeseadas(String(Math.max(1,porciones-1)))}
@@ -1852,31 +2039,76 @@ function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion
         </div>
       </div>
 
+      {/* Selector de tuppers */}
+      <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:14}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>REPARTIR EN CUÁNTOS TUPPERS</div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <button onClick={()=>setCantTuppers(String(Math.max(1,tuppers-1)))}
+            style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
+              color:G.text,fontSize:18,cursor:"pointer"}}>−</button>
+          <input value={cantTuppers} onChange={e=>setCantTuppers(e.target.value)}
+            type="text" inputMode="numeric"
+            style={{flex:1,fontSize:22,fontWeight:700,textAlign:"center",
+              border:`1px solid ${G.border}`,borderRadius:3,padding:"8px",
+              background:G.surf2,color:G.gold,outline:"none",fontFamily:"inherit"}}/>
+          <button onClick={()=>setCantTuppers(String(tuppers+1))}
+            style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
+              color:G.text,fontSize:18,cursor:"pointer"}}>+</button>
+        </div>
+        <div style={{fontSize:10,color:G.textDim,marginTop:6,textAlign:"center"}}>
+          📦 {tuppers} tupper{tuppers!==1?"s":""} · {fmt(porciones/tuppers)} porción{porciones/tuppers!==1?"es":""} cada uno
+        </div>
+      </div>
+
       {/* Información nutricional */}
       <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:14}}>
         <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:10}}>INFORMACIÓN NUTRICIONAL</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
           <div>
             <div style={{fontSize:9,color:G.textDim,marginBottom:6,letterSpacing:1}}>POR PORCIÓN</div>
             {[["Kcal",nutricionPorPorcion.kcal,""],["Carbs",nutricionPorPorcion.carbs,"g"],
               ["Prot",nutricionPorPorcion.prot,"g"],["Grasas",nutricionPorPorcion.grasas,"g"]].map(([lbl,val,u])=>(
-              <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"3px 0"}}>
+              <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontSize:10,padding:"3px 0"}}>
                 <span style={{color:G.textSec}}>{lbl}</span>
                 <span style={{color:G.text,fontWeight:600}}>{fmt(val)}{u}</span>
               </div>
             ))}
           </div>
           <div>
-            <div style={{fontSize:9,color:G.textDim,marginBottom:6,letterSpacing:1}}>TOTAL ({fmt(porciones)} porc.)</div>
+            <div style={{fontSize:9,color:G.gold,marginBottom:6,letterSpacing:1}}>POR TUPPER</div>
+            {[["Kcal",nutricionPorTupper.kcal,""],["Carbs",nutricionPorTupper.carbs,"g"],
+              ["Prot",nutricionPorTupper.prot,"g"],["Grasas",nutricionPorTupper.grasas,"g"]].map(([lbl,val,u])=>(
+              <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontSize:10,padding:"3px 0"}}>
+                <span style={{color:G.textSec}}>{lbl}</span>
+                <span style={{color:G.gold,fontWeight:700}}>{fmt(val)}{u}</span>
+              </div>
+            ))}
+          </div>
+          <div>
+            <div style={{fontSize:9,color:G.textDim,marginBottom:6,letterSpacing:1}}>TOTAL</div>
             {[["Kcal",nutricionTotal.kcal,""],["Carbs",nutricionTotal.carbs,"g"],
               ["Prot",nutricionTotal.prot,"g"],["Grasas",nutricionTotal.grasas,"g"]].map(([lbl,val,u])=>(
-              <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"3px 0"}}>
+              <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontSize:10,padding:"3px 0"}}>
                 <span style={{color:G.textSec}}>{lbl}</span>
-                <span style={{color:G.gold,fontWeight:600}}>{fmt(val)}{u}</span>
+                <span style={{color:G.text,fontWeight:600}}>{fmt(val)}{u}</span>
               </div>
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Ingredientes por tupper */}
+      <div style={{border:`1px solid ${G.goldMid}`,borderRadius:4,padding:"14px",background:G.goldDim,marginBottom:14}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:10}}>📦 CADA TUPPER LLEVA</div>
+        {ingredientesPorTupper.map((ing,i) => (
+          <div key={i} style={{display:"flex",justifyContent:"space-between",
+            padding:"6px 0",borderBottom:i<ingredientesPorTupper.length-1?`1px solid ${G.goldMid}`:"none"}}>
+            <span style={{fontSize:12,color:G.text,textTransform:"capitalize"}}>{ing.nombre}</span>
+            <span style={{fontSize:12,color:G.gold,fontWeight:600}}>
+              {fmt(ing.cantidad)} {VP_UNIDADES.find(u=>u.id===ing.unidad)?.label}
+            </span>
+          </div>
+        ))}
       </div>
 
       {/* Verificación de stock */}
@@ -1903,14 +2135,14 @@ function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion
         ))}
       </div>
 
-      {/* Botón cocinar — descuenta del stock */}
+      {/* Botón cocinar — descuenta del stock y guarda los tuppers preparados */}
       <button onClick={descontarDeStock} disabled={descontado}
         style={{width:"100%",padding:"12px",borderRadius:3,
           background:descontado?G.surf2:G.gold,
           border:descontado?`1px solid ${G.border}`:"none",
           color:descontado?G.textDim:G.bg,fontSize:13,fontWeight:700,letterSpacing:1,
           cursor:descontado?"default":"pointer"}}>
-        {descontado ? "✓ DESCONTADO DEL STOCK" : "🍳 COCINAR Y DESCONTAR DEL STOCK"}
+        {descontado ? `✓ ${tuppers} TUPPER${tuppers!==1?"S":""} LISTO${tuppers!==1?"S":""}` : "🍳 COCINAR Y ARMAR TUPPERS"}
       </button>
       <div style={{fontSize:10,color:G.textDim,marginTop:8,textAlign:"center"}}>
         Si algo no coincide, podés ajustarlo manualmente después en 📦 Stock
@@ -2535,6 +2767,79 @@ function VpLogrosScreen({ onBack }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// TUPPERS REALES — los preparados desde Cocina, con sus ingredientes e info exacta
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpTuppersReales() {
+  const [lotes, setLotes] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!firebaseOk) { setLoading(false); return; }
+    getDoc(doc(db, vpTuppersPreparadosPath())).then(snap => {
+      setLotes(snap.exists() ? snap.data().items || [] : []);
+      setLoading(false);
+    }).catch(()=>setLoading(false));
+  }, []);
+
+  async function marcarConsumido(loteId) {
+    const nuevos = lotes.map(l => l.id===loteId ? { ...l, consumidos: Math.min(l.cantTuppers, l.consumidos+1) } : l);
+    setLotes(nuevos);
+    if (!firebaseOk) return;
+    try { await setDoc(doc(db, vpTuppersPreparadosPath()), { items: nuevos }); } catch(e) {}
+  }
+
+  const fmt = n => n.toLocaleString("es-AR",{minimumFractionDigits:0,maximumFractionDigits:1});
+  // Solo mostramos lotes que todavía tienen tuppers disponibles (no consumidos del todo)
+  const lotesDisponibles = lotes.filter(l => l.consumidos < l.cantTuppers);
+
+  if (loading) return null;
+  if (lotesDisponibles.length===0) return (
+    <div style={{border:`1px dashed ${G.border}`,borderRadius:4,padding:"12px",marginBottom:8,textAlign:"center"}}>
+      <div style={{fontSize:10,color:G.textDim}}>
+        No hay tuppers preparados todavía. Cociná una receta en 🍳 Cocina para que aparezcan acá.
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{marginBottom:8}}>
+      <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>📦 TUPPERS PREPARADOS (DESDE COCINA)</div>
+      {lotesDisponibles.map(lote => {
+        const disponibles = lote.cantTuppers - lote.consumidos;
+        return (
+          <div key={lote.id} style={{border:`1px solid ${G.goldMid}`,borderRadius:4,
+            padding:"12px",background:G.goldDim,marginBottom:6}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+              <div style={{fontSize:13,fontWeight:600,color:G.text,textTransform:"capitalize"}}>{lote.recetaNombre}</div>
+              <div style={{fontSize:11,fontWeight:700,color:G.gold}}>{disponibles} disp.</div>
+            </div>
+            <div style={{display:"flex",gap:10,fontSize:10,color:G.textSec,marginBottom:8}}>
+              <span>{fmt(lote.nutricionPorTupper.kcal)} kcal</span>
+              <span>{fmt(lote.nutricionPorTupper.prot)}g prot</span>
+              <span>{fmt(lote.nutricionPorTupper.carbs)}g carb</span>
+              <span>{fmt(lote.nutricionPorTupper.grasas)}g grasa</span>
+            </div>
+            <div style={{fontSize:10,color:G.textDim,marginBottom:8}}>
+              {lote.ingredientesPorTupper.map((ing,i)=>(
+                <span key={i}>
+                  {ing.nombre} {fmt(ing.cantidad)}{VP_UNIDADES.find(u=>u.id===ing.unidad)?.label}
+                  {i<lote.ingredientesPorTupper.length-1?" · ":""}
+                </span>
+              ))}
+            </div>
+            <button onClick={()=>marcarConsumido(lote.id)}
+              style={{width:"100%",padding:"7px",borderRadius:3,background:G.gold,
+                border:"none",color:G.bg,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+              ✓ COMÍ ESTE TUPPER
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // REGISTRO DIARIO DE UN PILAR
 // ═══════════════════════════════════════════════════════════════════════════════
 function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock }) {
@@ -2759,6 +3064,9 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock }) {
             </button>
           </div>
 
+          {/* Tuppers reales preparados desde Cocina — fuente principal de info */}
+          <VpTuppersReales />
+
           {/* Desayuno fijo */}
           <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
             <div style={{fontSize:13,fontWeight:600,color:G.text,marginBottom:8,fontFamily:"system-ui,sans-serif"}}>🥣 Desayuno (fijo)</div>
@@ -2773,6 +3081,11 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock }) {
             <div style={{fontSize:11,color:G.textDim,marginTop:5,fontFamily:"system-ui,sans-serif"}}>
               {VP_DESAYUNO.prot}g prot · {VP_DESAYUNO.kcal} kcal
             </div>
+          </div>
+
+          {/* Tuppers plantilla — referencia fija, no descuentan stock ni vienen de una receta */}
+          <div style={{fontSize:9,color:G.textDim,letterSpacing:2,marginTop:12,marginBottom:6}}>
+            PLANTILLA MANUAL (referencia, sin conexión a Stock)
           </div>
 
           {/* Tupper 1 */}
