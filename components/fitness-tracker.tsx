@@ -269,7 +269,7 @@ function LoginScreen({ onLogin }) {
 
         {/* Línea inferior */}
         <div style={{position:"absolute", bottom:24, fontSize:9, color:"#333", letterSpacing:2}}>
-          UN NUEVO COMIENZO · TAPAS 1 · 14.06.2026
+          UN NUEVO COMIENZO · TAPAS 2 · 14.06.2026
         </div>
       </div>
     );
@@ -439,7 +439,7 @@ function LoginScreen({ onLogin }) {
             fontSize:9, color:"#333", letterSpacing:3,
             marginTop:20, textAlign:"center",
           }}>
-            UN NUEVO COMIENZO · TAPAS 1
+            UN NUEVO COMIENZO · TAPAS 2
           </div>
         </div>
       </div>
@@ -462,15 +462,16 @@ const VP_C = {
   fe:       { bg:"#0f0c00", border:"#C9A84C", text:"#C9A84C", dot:"#C9A84C", dim:"#C9A84C22", emoji:"✝️"  },
   trading:  { bg:"#001a0f", border:"#7AB85A", text:"#7AB85A", dot:"#7AB85A", dim:"#7AB85A22", emoji:"📈"  },
   hogar:    { bg:"#00091a", border:"#6FA3D4", text:"#6FA3D4", dot:"#6FA3D4", dim:"#6FA3D422", emoji:"🏠"  },
-  nutricion:{ bg:"#1a0500", border:"#C9724C", text:"#C9724C", dot:"#C9724C", dim:"#C9724C22", emoji:"🍗"  },
+  fitness:  { bg:"#1a0500", border:"#C9724C", text:"#C9724C", dot:"#C9724C", dim:"#C9724C22", emoji:"🏋️"  },
+  nutricion:{ bg:"#1a1000", border:"#D4A35C", text:"#D4A35C", dot:"#D4A35C", dim:"#D4A35C22", emoji:"🍗"  },
   vision:   { bg:"#0d0014", border:"#A07AC9", text:"#A07AC9", dot:"#A07AC9", dim:"#A07AC922", emoji:"🃏"  },
 };
 
-// ── 5 Pilares ─────────────────────────────────────────────────────────────────
+// ── 6 Pilares ─────────────────────────────────────────────────────────────────
 const VP_PILARES = [
   { id:"fe", label:"Fe & Propósito", color:VP_C.fe, habitos:[
     { id:"jarvis",    label:"Jarvis Wake Up completado" },
-    { id:"versiculo", label:"Meditación en la palabra del señor" },
+    { id:"versiculo", label:"Meditación Salmos 119:97" },
     { id:"intencion", label:"Intención del día definida" },
   ], notaLabel:"Palabra o frase de meditación de hoy" },
 
@@ -487,13 +488,16 @@ const VP_PILARES = [
     { id:"prep_manana",label:"Preparé el entorno para mañana" },
   ], notaLabel:"Tarea de hogar completada o pendiente hoy" },
 
-  { id:"nutricion", label:"Fitness & Nutrición", color:VP_C.nutricion, habitos:[
+  { id:"fitness", label:"Fitness", color:VP_C.fitness, habitos:[
     { id:"wod",        label:"Completé sesión de CrossFit / WOD" },
+    { id:"hidratacion",label:"Hidratación adecuada durante el día" },
+  ], notaLabel:"Cómo fue el entrenamiento / cómo me sentí", esFitness:true },
+
+  { id:"nutricion", label:"Nutrición", color:VP_C.nutricion, habitos:[
     { id:"desayuno",   label:"Desayuno: avena + leche + banana + huevos" },
     { id:"tupper1",    label:"Tupper 1 (almuerzo) comido" },
     { id:"tupper2",    label:"Tupper 2 (cena) comido" },
-    { id:"hidratacion",label:"Hidratación adecuada durante el día" },
-  ], notaLabel:"Cómo fue el entrenamiento / cómo me sentí", esFitness:true },
+  ], notaLabel:"Cómo fue la alimentación del día", esNutricion:true },
 
   { id:"vision", label:'"El Loco" — Visión', color:VP_C.vision, habitos:[
     { id:"accion",     label:"Realicé al menos UNA acción hacia mi visión" },
@@ -648,6 +652,33 @@ function vpVersiculoPath(mesId, wIdx, dIdx) {
 function vpComprasPath() {
   return `vida_personal/_compras/lista/actual`;
 }
+
+// ── Stock de alimentos — se alimenta automáticamente desde Compras ──────────
+function vpStockPath() {
+  return `vida_personal/_stock/items/actual`;
+}
+
+// ── Recetas — base de platos con ingredientes e info nutricional ────────────
+function vpRecetasPath() {
+  return `vida_personal/_recetas/lista/actual`;
+}
+
+// Unidades de medida disponibles para Stock/Compras
+const VP_UNIDADES = [
+  { id:"kg", label:"Kg" },
+  { id:"u",  label:"U." },
+  { id:"lts",label:"Lts" },
+];
+
+// Normaliza el nombre de un producto para agruparlo en Stock
+// (ignora mayúsculas/espacios extra, así "Tomate" y "tomate " son el mismo item)
+function vpNormalizarNombre(texto) {
+  return texto.trim().toLowerCase().replace(/\s+/g," ");
+}
+
+// Sectores de compra que efectivamente alimentan el Stock de alimentos
+// (Auto y Pendientes no son comida, así que no impactan en Stock/Nutrición)
+const VP_SECTORES_ALIMENTO = ["verduleria","carniceria","supermercado"];
 
 // ── Notas persistentes por pilar — viven fuera del día, no se pisan ─────────
 // Cada pilar tiene su propia colección de notas (texto + fecha), independiente
@@ -862,9 +893,11 @@ function vpMesActualTs() {
   return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
 }
 
-function VpListaCompras({ onBack }) {
-  const [items, setItems]     = useState([]); // [{ id, texto, monto, sector, comprado, fechaComprado }]
+function VpListaCompras({ onBack, onAbrirStock }) {
+  const [items, setItems]     = useState([]); // [{ id, texto, monto, cantidad, unidad, sector, comprado, fechaComprado }]
   const [nuevo, setNuevo]     = useState("");
+  const [cantidadNueva, setCantidadNueva] = useState("");
+  const [unidadNueva, setUnidadNueva] = useState("kg");
   const [montoNuevo, setMontoNuevo] = useState("");
   const [sectorActivo, setSectorActivo] = useState("verduleria");
   const [loading, setLoading] = useState(true);
@@ -889,23 +922,71 @@ function VpListaCompras({ onBack }) {
     } catch(e) { setSaveStatus("error"); }
   }
 
+  // Suma (o crea) un producto en el Stock global, agrupado por nombre normalizado.
+  // Si ya existe el producto con la misma unidad, suma cantidades y promedia precio.
+  async function sumarAlStock(item) {
+    if (!firebaseOk) return;
+    if (!VP_SECTORES_ALIMENTO.includes(item.sector)) return; // Auto/Pendientes no son comida
+    if (item.cantidad == null) return; // sin cantidad no hay nada que stockear
+
+    try {
+      const snap = await getDoc(doc(db, vpStockPath()));
+      const stockActual = snap.exists() ? snap.data().items || [] : [];
+      const key = vpNormalizarNombre(item.texto);
+      const idx = stockActual.findIndex(s => vpNormalizarNombre(s.nombre)===key && s.unidad===item.unidad);
+
+      let nuevoStock;
+      if (idx >= 0) {
+        const existente = stockActual[idx];
+        const cantidadTotal = (existente.cantidad||0) + item.cantidad;
+        // Precio promedio ponderado si hay monto nuevo
+        let precioU = existente.precioUnitario || null;
+        if (item.monto != null && item.cantidad > 0) {
+          const precioNuevo = item.monto / item.cantidad;
+          precioU = precioU != null
+            ? ((precioU*(existente.cantidad||0)) + (precioNuevo*item.cantidad)) / cantidadTotal
+            : precioNuevo;
+        }
+        nuevoStock = [...stockActual];
+        nuevoStock[idx] = { ...existente, cantidad: cantidadTotal, precioUnitario: precioU,
+          sector: item.sector, actualizado: Date.now() };
+      } else {
+        const precioU = (item.monto != null && item.cantidad > 0) ? item.monto/item.cantidad : null;
+        nuevoStock = [...stockActual, {
+          id:`${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+          nombre: item.texto, cantidad: item.cantidad, unidad: item.unidad,
+          precioUnitario: precioU, sector: item.sector, actualizado: Date.now(),
+        }];
+      }
+      await setDoc(doc(db, vpStockPath()), { items: nuevoStock });
+    } catch(e) {}
+  }
+
   function agregar() {
     const texto = nuevo.trim();
     if (!texto) return;
     const monto = montoNuevo.trim() ? parseFloat(montoNuevo.replace(",",".")) : null;
+    const cantidad = cantidadNueva.trim() ? parseFloat(cantidadNueva.replace(",",".")) : null;
     const item = {
       id: `${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
       texto, monto: (monto && !isNaN(monto)) ? monto : null,
+      cantidad: (cantidad && !isNaN(cantidad)) ? cantidad : null,
+      unidad: unidadNueva,
       sector: sectorActivo, comprado:false, fechaComprado:null,
     };
     persistir([...items, item]);
-    setNuevo(""); setMontoNuevo("");
+    setNuevo(""); setMontoNuevo(""); setCantidadNueva("");
   }
 
   function toggleComprado(id) {
+    const item = items.find(it=>it.id===id);
+    if (!item) return;
+    const marcandoComprado = !item.comprado;
     persistir(items.map(it => it.id===id
-      ? { ...it, comprado: !it.comprado, fechaComprado: !it.comprado ? Date.now() : null }
+      ? { ...it, comprado: marcandoComprado, fechaComprado: marcandoComprado ? Date.now() : null }
       : it));
+    // Al marcar como comprado, sumamos automáticamente al Stock
+    if (marcandoComprado) sumarAlStock(item);
   }
 
   function eliminar(id) {
@@ -927,6 +1008,7 @@ function VpListaCompras({ onBack }) {
   const pendientesSector = itemsSector.filter(it => !it.comprado);
   const compradosSector  = itemsSector.filter(it => it.comprado);
   const totalSector = compradosSector.reduce((a,it)=>a+(it.monto||0),0);
+  const esSectorAlimento = VP_SECTORES_ALIMENTO.includes(sectorActivo);
 
   // KPIs globales
   const inicioSemana = vpSemanaActual();
@@ -955,8 +1037,16 @@ function VpListaCompras({ onBack }) {
       {/* Header */}
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
         <button onClick={onBack} style={S.btn(false,false)}>← Pilares</button>
-        <div style={{flex:1,textAlign:"right"}}>
-          <span style={{fontSize:10,padding:"3px 8px",borderRadius:3,letterSpacing:.5,
+        <div style={{flex:1,textAlign:"right",display:"flex",gap:6,justifyContent:"flex-end"}}>
+          {onAbrirStock && (
+            <button onClick={onAbrirStock}
+              style={{fontSize:10,padding:"5px 10px",borderRadius:3,letterSpacing:.5,
+                background:G.surf2,color:G.textSec,border:`1px solid ${G.border}`,
+                cursor:"pointer",fontWeight:600}}>
+              📦 VER STOCK
+            </button>
+          )}
+          <span style={{fontSize:10,padding:"5px 8px",borderRadius:3,letterSpacing:.5,
             background:saveStatus==="saving"?G.goldDim:saveStatus==="saved"?G.okBg:G.surf2,
             color:saveStatus==="saving"?G.gold:saveStatus==="saved"?"#7AB85A":G.textDim,
             border:`1px solid ${G.border}`}}>
@@ -1023,16 +1113,12 @@ function VpListaCompras({ onBack }) {
         })}
       </div>
 
-      {/* Input agregar — producto + monto en el mismo renglón */}
-      <div style={{display:"flex",gap:6,marginBottom:10}}>
+      {/* Input agregar — producto + cantidad/unidad + monto */}
+      <div style={{display:"flex",gap:6,marginBottom:6}}>
         <input value={nuevo} onChange={e=>setNuevo(e.target.value)}
           onKeyDown={e=>e.key==="Enter"&&agregar()}
           placeholder={`Agregar a ${VP_SECTORES_COMPRA.find(s=>s.id===sectorActivo)?.label}...`}
-          style={{...S.inp(false),flex:2}}/>
-        <input value={montoNuevo} onChange={e=>setMontoNuevo(e.target.value)}
-          onKeyDown={e=>e.key==="Enter"&&agregar()}
-          placeholder="$" type="text" inputMode="decimal"
-          style={{...S.inp(false),flex:1,textAlign:"right"}}/>
+          style={{...S.inp(false),flex:1}}/>
         <button onClick={agregar}
           style={{padding:"8px 14px",borderRadius:3,background:G.gold,
             border:"none",color:G.bg,fontSize:18,cursor:"pointer",fontWeight:700,
@@ -1040,6 +1126,30 @@ function VpListaCompras({ onBack }) {
           +
         </button>
       </div>
+      {esSectorAlimento && (
+        <div style={{display:"flex",gap:6,marginBottom:10}}>
+          <input value={cantidadNueva} onChange={e=>setCantidadNueva(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&agregar()}
+            placeholder="Cant." type="text" inputMode="decimal"
+            style={{...S.inp(false),flex:1,textAlign:"center"}}/>
+          <select value={unidadNueva} onChange={e=>setUnidadNueva(e.target.value)}
+            style={{...S.inp(false),flex:1,cursor:"pointer",textAlign:"center"}}>
+            {VP_UNIDADES.map(u=> <option key={u.id} value={u.id}>{u.label}</option>)}
+          </select>
+          <input value={montoNuevo} onChange={e=>setMontoNuevo(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&agregar()}
+            placeholder="$" type="text" inputMode="decimal"
+            style={{...S.inp(false),flex:1,textAlign:"right"}}/>
+        </div>
+      )}
+      {!esSectorAlimento && (
+        <div style={{marginBottom:10}}>
+          <input value={montoNuevo} onChange={e=>setMontoNuevo(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&agregar()}
+            placeholder="$ monto (opcional)" type="text" inputMode="decimal"
+            style={S.inp(false)}/>
+        </div>
+      )}
 
       {/* Total del sector activo */}
       {compradosSector.length > 0 && (
@@ -1068,7 +1178,14 @@ function VpListaCompras({ onBack }) {
               <div onClick={()=>toggleComprado(it.id)}
                 style={{width:18,height:18,borderRadius:2,flexShrink:0,cursor:"pointer",
                   border:`1.5px solid ${G.textDim}`,background:"transparent"}}/>
-              <span style={{flex:1,fontSize:13,color:G.text}}>{it.texto}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,color:G.text}}>{it.texto}</div>
+                {it.cantidad!=null && (
+                  <div style={{fontSize:10,color:G.textDim,marginTop:1}}>
+                    {it.cantidad} {VP_UNIDADES.find(u=>u.id===it.unidad)?.label}
+                  </div>
+                )}
+              </div>
               <input
                 defaultValue={it.monto ?? ""}
                 onBlur={e=>editarMonto(it.id, e.target.value)}
@@ -1107,9 +1224,14 @@ function VpListaCompras({ onBack }) {
                       border:`1.5px solid ${G.gold}`,background:G.gold,
                       display:"flex",alignItems:"center",justifyContent:"center",
                       fontSize:11,color:G.bg,fontWeight:700}}>✓</div>
-                  <span style={{flex:1,fontSize:13,color:G.textSec,textDecoration:"line-through"}}>
-                    {it.texto}
-                  </span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,color:G.textSec,textDecoration:"line-through"}}>{it.texto}</div>
+                    {it.cantidad!=null && (
+                      <div style={{fontSize:10,color:G.textDim,marginTop:1}}>
+                        {it.cantidad} {VP_UNIDADES.find(u=>u.id===it.unidad)?.label}
+                      </div>
+                    )}
+                  </div>
                   {it.monto!=null && (
                     <span style={{fontSize:12,color:G.gold,fontWeight:600}}>${fmt(it.monto)}</span>
                   )}
@@ -1129,6 +1251,675 @@ function VpListaCompras({ onBack }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// STOCK — visualización de productos disponibles, editable manualmente
+// Se alimenta automáticamente desde Compras al marcar items como comprados.
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpStock({ onBack }) {
+  const [items, setItems]     = useState([]); // [{ id, nombre, cantidad, unidad, precioUnitario, sector, actualizado }]
+  const [loading, setLoading] = useState(true);
+  const [saveStatus, setSaveStatus] = useState("idle");
+  const [sectorActivo, setSectorActivo] = useState("todos");
+  const [editandoId, setEditandoId] = useState(null);
+  const [edCantidad, setEdCantidad] = useState("");
+  const [nuevoNombre, setNuevoNombre] = useState("");
+  const [nuevaCantidad, setNuevaCantidad] = useState("");
+  const [nuevaUnidad, setNuevaUnidad] = useState("kg");
+  const [nuevoSector, setNuevoSector] = useState("verduleria");
+
+  useEffect(() => {
+    if (!firebaseOk) { setLoading(false); return; }
+    getDoc(doc(db, vpStockPath())).then(snap => {
+      setItems(snap.exists() ? snap.data().items || [] : []);
+      setLoading(false);
+    }).catch(()=>setLoading(false));
+  }, []);
+
+  async function persistir(nuevaLista) {
+    setItems(nuevaLista);
+    if (!firebaseOk) return;
+    setSaveStatus("saving");
+    try {
+      await setDoc(doc(db, vpStockPath()), { items: nuevaLista });
+      setSaveStatus("saved");
+      setTimeout(()=>setSaveStatus("idle"), 1500);
+    } catch(e) { setSaveStatus("error"); }
+  }
+
+  function guardarEdicion(id) {
+    const cant = parseFloat(edCantidad.replace(",","."));
+    persistir(items.map(it => it.id===id ? { ...it, cantidad: isNaN(cant)?0:cant, actualizado:Date.now() } : it));
+    setEditandoId(null); setEdCantidad("");
+  }
+
+  function eliminarItem(id) {
+    persistir(items.filter(it=>it.id!==id));
+  }
+
+  function agregarManual() {
+    const nombre = nuevoNombre.trim();
+    if (!nombre) return;
+    const cantidad = parseFloat(nuevaCantidad.replace(",","."));
+    persistir([...items, {
+      id:`${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      nombre, cantidad: isNaN(cantidad)?0:cantidad, unidad:nuevaUnidad,
+      precioUnitario:null, sector:nuevoSector, actualizado:Date.now(),
+    }]);
+    setNuevoNombre(""); setNuevaCantidad("");
+  }
+
+  const sectoresConTodos = [{id:"todos",label:"Todos",emoji:"📦",color:G.gold}, ...VP_SECTORES_COMPRA.filter(s=>VP_SECTORES_ALIMENTO.includes(s.id))];
+  const itemsFiltrados = sectorActivo==="todos" ? items : items.filter(it=>it.sector===sectorActivo);
+  const fmt = n => (n??0).toLocaleString("es-AR",{minimumFractionDigits:0,maximumFractionDigits:2});
+
+  return (
+    <div style={{minHeight:"100vh",background:G.bg,fontFamily:"system-ui,sans-serif",
+      padding:"24px 16px 56px",maxWidth:430,margin:"0 auto"}}>
+
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+        <button onClick={onBack} style={S.btn(false,false)}>← Volver</button>
+        <div style={{flex:1,textAlign:"right"}}>
+          <span style={{fontSize:10,padding:"5px 8px",borderRadius:3,letterSpacing:.5,
+            background:saveStatus==="saving"?G.goldDim:saveStatus==="saved"?G.okBg:G.surf2,
+            color:saveStatus==="saving"?G.gold:saveStatus==="saved"?"#7AB85A":G.textDim,
+            border:`1px solid ${G.border}`}}>
+            {saveStatus==="saving"?"GUARDANDO…":saveStatus==="saved"?"✓ GUARDADO":"AUTO"}
+          </span>
+        </div>
+      </div>
+
+      <div style={{textAlign:"center",marginBottom:16}}>
+        <div style={{fontSize:28,marginBottom:6}}>📦</div>
+        <div style={{fontSize:14,fontWeight:700,color:G.text,letterSpacing:1,fontFamily:"'Courier New',monospace"}}>
+          STOCK DE ALIMENTOS
+        </div>
+        <div style={{fontSize:10,color:G.textDim,marginTop:4}}>
+          Se actualiza automáticamente desde Compras
+        </div>
+      </div>
+
+      {/* Tabs sector */}
+      <div style={{display:"flex",gap:4,marginBottom:14,overflowX:"auto"}}>
+        {sectoresConTodos.map(s => {
+          const active = sectorActivo===s.id;
+          return (
+            <button key={s.id} onClick={()=>setSectorActivo(s.id)}
+              style={{flex:1,whiteSpace:"nowrap",padding:"8px 6px",fontSize:11,cursor:"pointer",
+                border:`1px solid ${active?s.color:G.border}`,borderRadius:4,
+                background:active?`${s.color}18`:G.surf2,
+                color:active?s.color:G.textSec,fontWeight:active?600:400}}>
+              {s.emoji} {s.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Agregar manual */}
+      <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:14}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>AGREGAR / AJUSTAR MANUAL</div>
+        <input value={nuevoNombre} onChange={e=>setNuevoNombre(e.target.value)}
+          placeholder="Nombre del producto" style={{...S.inp(false),marginBottom:6}}/>
+        <div style={{display:"flex",gap:6}}>
+          <input value={nuevaCantidad} onChange={e=>setNuevaCantidad(e.target.value)}
+            placeholder="Cant." type="text" inputMode="decimal"
+            style={{...S.inp(false),flex:1,textAlign:"center"}}/>
+          <select value={nuevaUnidad} onChange={e=>setNuevaUnidad(e.target.value)}
+            style={{...S.inp(false),flex:1,cursor:"pointer",textAlign:"center"}}>
+            {VP_UNIDADES.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}
+          </select>
+          <select value={nuevoSector} onChange={e=>setNuevoSector(e.target.value)}
+            style={{...S.inp(false),flex:1.4,cursor:"pointer",fontSize:11}}>
+            {VP_SECTORES_COMPRA.filter(s=>VP_SECTORES_ALIMENTO.includes(s.id)).map(s=>
+              <option key={s.id} value={s.id}>{s.emoji} {s.label}</option>)}
+          </select>
+        </div>
+        <button onClick={agregarManual}
+          style={{width:"100%",marginTop:6,padding:"8px",borderRadius:3,background:G.gold,
+            border:"none",color:G.bg,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+          + AGREGAR AL STOCK
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{textAlign:"center",color:G.textDim,fontSize:11,padding:20,letterSpacing:1,
+          fontFamily:"'Courier New',monospace"}}>CARGANDO STOCK...</div>
+      ) : itemsFiltrados.length===0 ? (
+        <div style={{textAlign:"center",color:G.textDim,fontSize:12,padding:30}}>
+          Sin productos en stock. Comprá algo en {sectorActivo==="todos"?"Verdulería, Carnicería o Supermercado":"este sector"} para que aparezca aquí.
+        </div>
+      ) : (
+        itemsFiltrados.sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(it => {
+          const sectorInfo = VP_SECTORES_COMPRA.find(s=>s.id===it.sector);
+          const bajo = it.cantidad <= 0;
+          return (
+            <div key={it.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
+              border:`1px solid ${bajo?"#C9724C44":G.border}`,borderRadius:4,marginBottom:5,
+              background:bajo?"#1a050008":G.surf}}>
+              <span style={{fontSize:16}}>{sectorInfo?.emoji||"📦"}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,color:G.text,textTransform:"capitalize"}}>{it.nombre}</div>
+                {it.precioUnitario!=null && (
+                  <div style={{fontSize:10,color:G.textDim,marginTop:1}}>
+                    ${fmt(it.precioUnitario)} por {VP_UNIDADES.find(u=>u.id===it.unidad)?.label}
+                  </div>
+                )}
+              </div>
+              {editandoId===it.id ? (
+                <>
+                  <input autoFocus value={edCantidad} onChange={e=>setEdCantidad(e.target.value)}
+                    onKeyDown={e=>e.key==="Enter"&&guardarEdicion(it.id)}
+                    type="text" inputMode="decimal"
+                    style={{width:60,fontSize:13,padding:"4px 6px",textAlign:"center",
+                      border:`1px solid ${G.gold}`,borderRadius:3,background:G.surf2,
+                      color:G.gold,outline:"none",fontFamily:"inherit"}}/>
+                  <button onClick={()=>guardarEdicion(it.id)}
+                    style={{background:"none",border:"none",color:G.gold,fontSize:14,cursor:"pointer"}}>✓</button>
+                </>
+              ) : (
+                <div onClick={()=>{setEditandoId(it.id);setEdCantidad(String(it.cantidad));}}
+                  style={{textAlign:"right",cursor:"pointer"}}>
+                  <div style={{fontSize:15,fontWeight:700,color:bajo?"#C9724C":G.gold}}>
+                    {fmt(it.cantidad)}
+                  </div>
+                  <div style={{fontSize:9,color:G.textDim}}>{VP_UNIDADES.find(u=>u.id===it.unidad)?.label}</div>
+                </div>
+              )}
+              <button onClick={()=>eliminarItem(it.id)}
+                style={{background:"none",border:"none",color:G.textDim,fontSize:16,
+                  cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RECETAS — base de platos: ingredientes + cantidades + info nutricional
+// Carga manual o automática (sube PDF/imagen y la IA extrae los datos)
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
+  const [nombre, setNombre] = useState(recetaInicial?.nombre || "");
+  const [porcionesBase, setPorcionesBase] = useState(recetaInicial?.porcionesBase || "4");
+  const [ingredientes, setIngredientes] = useState(recetaInicial?.ingredientes || [{nombre:"",cantidad:"",unidad:"kg"}]);
+  const [kcal, setKcal] = useState(recetaInicial?.nutricion?.kcal || "");
+  const [carbs, setCarbs] = useState(recetaInicial?.nutricion?.carbs || "");
+  const [prot, setProt] = useState(recetaInicial?.nutricion?.prot || "");
+  const [grasas, setGrasas] = useState(recetaInicial?.nutricion?.grasas || "");
+  const [archivo, setArchivo] = useState(null);
+  const [procesando, setProcesando] = useState(false);
+  const [errorIA, setErrorIA] = useState("");
+  const fileInputRef = useRef(null);
+
+  function agregarIngrediente() {
+    setIngredientes([...ingredientes, {nombre:"",cantidad:"",unidad:"kg"}]);
+  }
+  function actualizarIngrediente(i, campo, valor) {
+    setIngredientes(ingredientes.map((ing,idx)=>idx===i?{...ing,[campo]:valor}:ing));
+  }
+  function eliminarIngrediente(i) {
+    setIngredientes(ingredientes.filter((_,idx)=>idx!==i));
+  }
+
+  // Convierte el archivo a base64 y pide a la IA que extraiga la receta estructurada
+  async function procesarConIA(file) {
+    setProcesando(true); setErrorIA("");
+    try {
+      const base64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result.split(",")[1]);
+        r.onerror = () => rej(new Error("No se pudo leer el archivo"));
+        r.readAsDataURL(file);
+      });
+      const esPdf = file.type === "application/pdf";
+      const mediaType = file.type || (esPdf ? "application/pdf" : "image/jpeg");
+
+      const contentBlock = esPdf
+        ? { type:"document", source:{ type:"base64", media_type:mediaType, data:base64 } }
+        : { type:"image", source:{ type:"base64", media_type:mediaType, data:base64 } };
+
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({
+          model:"claude-sonnet-4-6",
+          max_tokens:1000,
+          messages:[{
+            role:"user",
+            content:[
+              contentBlock,
+              { type:"text", text:
+                "Extraé de esta receta: nombre del plato, porciones base que rinde la receta tal como está escrita, " +
+                "lista de ingredientes con cantidad numérica y unidad (kg, u o lts), e información nutricional total " +
+                "de toda la receta (kcal, carbohidratos en g, proteína en g, grasas en g) si está disponible o se puede estimar. " +
+                "Respondé ÚNICAMENTE con un JSON válido, sin texto adicional, sin markdown, con esta forma exacta: " +
+                '{"nombre":"...","porcionesBase":4,"ingredientes":[{"nombre":"...","cantidad":0,"unidad":"kg"}],' +
+                '"nutricion":{"kcal":0,"carbs":0,"prot":0,"grasas":0}}'
+              }
+            ]
+          }]
+        })
+      });
+      const data = await response.json();
+      const textBlock = (data.content||[]).find(c=>c.type==="text");
+      if (!textBlock) throw new Error("La IA no devolvió texto");
+      const limpio = textBlock.text.replace(/```json|```/g,"").trim();
+      const parsed = JSON.parse(limpio);
+
+      setNombre(parsed.nombre || "");
+      setPorcionesBase(String(parsed.porcionesBase || 4));
+      setIngredientes((parsed.ingredientes||[]).map(i=>({
+        nombre:i.nombre||"", cantidad:String(i.cantidad??""), unidad:i.unidad||"kg"
+      })));
+      setKcal(String(parsed.nutricion?.kcal??""));
+      setCarbs(String(parsed.nutricion?.carbs??""));
+      setProt(String(parsed.nutricion?.prot??""));
+      setGrasas(String(parsed.nutricion?.grasas??""));
+    } catch(e) {
+      setErrorIA("No se pudo procesar el archivo automáticamente. Cargá los datos manualmente abajo.");
+    } finally {
+      setProcesando(false);
+    }
+  }
+
+  function handleArchivo(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setArchivo(file);
+    procesarConIA(file);
+  }
+
+  function guardar() {
+    if (!nombre.trim()) return;
+    const ingredientesLimpios = ingredientes
+      .filter(i=>i.nombre.trim())
+      .map(i=>({ nombre:i.nombre.trim(), cantidad:parseFloat(i.cantidad)||0, unidad:i.unidad }));
+    onGuardar({
+      id: recetaInicial?.id || `${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      nombre: nombre.trim(),
+      porcionesBase: parseInt(porcionesBase)||4,
+      ingredientes: ingredientesLimpios,
+      nutricion: {
+        kcal: parseFloat(kcal)||0, carbs: parseFloat(carbs)||0,
+        prot: parseFloat(prot)||0, grasas: parseFloat(grasas)||0,
+      },
+      creado: recetaInicial?.creado || Date.now(),
+    });
+  }
+
+  return (
+    <div style={{border:`1px solid ${G.gold}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:14}}>
+      <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:10}}>
+        {recetaInicial ? "EDITAR RECETA" : "NUEVA RECETA"}
+      </div>
+
+      {/* Carga por archivo */}
+      <div style={{border:`1px dashed ${G.border}`,borderRadius:4,padding:"12px",marginBottom:12,textAlign:"center"}}>
+        <input ref={fileInputRef} type="file" accept="image/*,application/pdf" onChange={handleArchivo} style={{display:"none"}}/>
+        <button onClick={()=>fileInputRef.current?.click()} disabled={procesando}
+          style={{padding:"8px 16px",borderRadius:3,background:procesando?G.surf2:G.goldDim,
+            border:`1px solid ${G.goldMid}`,color:G.gold,fontSize:11,fontWeight:600,
+            cursor:procesando?"default":"pointer"}}>
+          {procesando ? "ANALIZANDO ARCHIVO…" : "📷 SUBIR FOTO O PDF DE LA RECETA"}
+        </button>
+        {archivo && !procesando && <div style={{fontSize:10,color:G.textDim,marginTop:6}}>{archivo.name}</div>}
+        {errorIA && <div style={{fontSize:10,color:"#C9724C",marginTop:6}}>{errorIA}</div>}
+        <div style={{fontSize:9,color:G.textDim,marginTop:6}}>o completá los datos manualmente abajo ↓</div>
+      </div>
+
+      <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>NOMBRE DEL PLATO</div>
+      <input value={nombre} onChange={e=>setNombre(e.target.value)} placeholder="Ej: Pollo al horno con papas"
+        style={{...S.inp(false),marginBottom:8}}/>
+
+      <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>PORCIONES QUE RINDE LA RECETA</div>
+      <input value={porcionesBase} onChange={e=>setPorcionesBase(e.target.value)} type="number"
+        style={{...S.inp(false),marginBottom:10,width:80}}/>
+
+      <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6}}>INGREDIENTES</div>
+      {ingredientes.map((ing,i)=>(
+        <div key={i} style={{display:"flex",gap:4,marginBottom:5}}>
+          <input value={ing.nombre} onChange={e=>actualizarIngrediente(i,"nombre",e.target.value)}
+            placeholder="Ingrediente" style={{...S.inp(false),flex:2}}/>
+          <input value={ing.cantidad} onChange={e=>actualizarIngrediente(i,"cantidad",e.target.value)}
+            placeholder="Cant." type="text" inputMode="decimal" style={{...S.inp(false),flex:1,textAlign:"center"}}/>
+          <select value={ing.unidad} onChange={e=>actualizarIngrediente(i,"unidad",e.target.value)}
+            style={{...S.inp(false),flex:1,cursor:"pointer"}}>
+            {VP_UNIDADES.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}
+          </select>
+          <button onClick={()=>eliminarIngrediente(i)}
+            style={{background:"none",border:"none",color:G.textDim,fontSize:16,cursor:"pointer",padding:"0 4px"}}>×</button>
+        </div>
+      ))}
+      <button onClick={agregarIngrediente}
+        style={{fontSize:10,color:G.textSec,background:"none",border:`1px dashed ${G.border}`,
+          borderRadius:3,padding:"6px 10px",cursor:"pointer",marginBottom:12}}>
+        + Agregar ingrediente
+      </button>
+
+      <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6}}>INFO NUTRICIONAL (TOTAL DE LA RECETA)</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:12}}>
+        {[["Kcal",kcal,setKcal],["Carbohidratos (g)",carbs,setCarbs],
+          ["Proteína (g)",prot,setProt],["Grasas (g)",grasas,setGrasas]].map(([lbl,val,setter])=>(
+          <div key={lbl}>
+            <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>{lbl.toUpperCase()}</div>
+            <input value={val} onChange={e=>setter(e.target.value)} type="text" inputMode="decimal"
+              style={{...S.inp(false),textAlign:"center"}}/>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:"flex",gap:6}}>
+        <button onClick={guardar}
+          style={{flex:1,padding:"10px",borderRadius:3,background:G.gold,border:"none",
+            color:G.bg,fontSize:12,fontWeight:700,cursor:"pointer"}}>GUARDAR RECETA</button>
+        <button onClick={onCancelar}
+          style={{flex:1,padding:"10px",borderRadius:3,background:G.surf2,
+            border:`1px solid ${G.border}`,color:G.textSec,fontSize:12,cursor:"pointer"}}>CANCELAR</button>
+      </div>
+    </div>
+  );
+}
+
+function VpRecetasScreen({ onBack, onUsarReceta }) {
+  const [recetas, setRecetas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [mostrarForm, setMostrarForm] = useState(false);
+  const [editando, setEditando] = useState(null);
+
+  useEffect(() => {
+    if (!firebaseOk) { setLoading(false); return; }
+    getDoc(doc(db, vpRecetasPath())).then(snap => {
+      setRecetas(snap.exists() ? snap.data().items || [] : []);
+      setLoading(false);
+    }).catch(()=>setLoading(false));
+  }, []);
+
+  async function persistir(nuevaLista) {
+    setRecetas(nuevaLista);
+    if (!firebaseOk) return;
+    try { await setDoc(doc(db, vpRecetasPath()), { items: nuevaLista }); } catch(e) {}
+  }
+
+  function guardarReceta(receta) {
+    const existe = recetas.some(r=>r.id===receta.id);
+    persistir(existe ? recetas.map(r=>r.id===receta.id?receta:r) : [...recetas, receta]);
+    setMostrarForm(false); setEditando(null);
+  }
+
+  function eliminarReceta(id) {
+    persistir(recetas.filter(r=>r.id!==id));
+  }
+
+  return (
+    <div style={{minHeight:"100vh",background:G.bg,fontFamily:"system-ui,sans-serif",
+      padding:"24px 16px 56px",maxWidth:430,margin:"0 auto"}}>
+
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+        <button onClick={onBack} style={S.btn(false,false)}>← Cocina</button>
+      </div>
+
+      <div style={{textAlign:"center",marginBottom:16}}>
+        <div style={{fontSize:28,marginBottom:6}}>📖</div>
+        <div style={{fontSize:14,fontWeight:700,color:G.text,letterSpacing:1,fontFamily:"'Courier New',monospace"}}>
+          RECETAS
+        </div>
+      </div>
+
+      {mostrarForm ? (
+        <VpRecetaForm recetaInicial={editando}
+          onGuardar={guardarReceta}
+          onCancelar={()=>{setMostrarForm(false);setEditando(null);}}/>
+      ) : (
+        <button onClick={()=>setMostrarForm(true)}
+          style={{width:"100%",padding:"12px",marginBottom:14,borderRadius:3,
+            border:`1px dashed ${G.border}`,background:"transparent",
+            color:G.textSec,fontSize:12,cursor:"pointer"}}>
+          + Agregar nueva receta
+        </button>
+      )}
+
+      {loading ? (
+        <div style={{textAlign:"center",color:G.textDim,fontSize:11,padding:20,letterSpacing:1,
+          fontFamily:"'Courier New',monospace"}}>CARGANDO RECETAS...</div>
+      ) : recetas.length===0 ? (
+        <div style={{textAlign:"center",color:G.textDim,fontSize:12,padding:30}}>
+          Sin recetas todavía. Subí una foto o cargala manual.
+        </div>
+      ) : (
+        recetas.map(r => (
+          <div key={r.id} style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",
+            background:G.surf,marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+              <div style={{fontSize:13,fontWeight:600,color:G.text}}>{r.nombre}</div>
+              <div style={{display:"flex",gap:4}}>
+                <button onClick={()=>{setEditando(r);setMostrarForm(true);}}
+                  style={{background:"none",border:"none",color:G.textDim,fontSize:13,cursor:"pointer"}}>✎</button>
+                <button onClick={()=>eliminarReceta(r.id)}
+                  style={{background:"none",border:"none",color:G.textDim,fontSize:15,cursor:"pointer"}}>×</button>
+              </div>
+            </div>
+            <div style={{fontSize:10,color:G.textDim,marginBottom:8}}>
+              Rinde {r.porcionesBase} porciones · {r.ingredientes.length} ingredientes
+            </div>
+            <div style={{display:"flex",gap:10,fontSize:10,color:G.textSec,marginBottom:10}}>
+              <span>{r.nutricion.kcal} kcal</span>
+              <span>{r.nutricion.prot}g prot</span>
+              <span>{r.nutricion.carbs}g carb</span>
+              <span>{r.nutricion.grasas}g grasa</span>
+            </div>
+            {onUsarReceta && (
+              <button onClick={()=>onUsarReceta(r)}
+                style={{width:"100%",padding:"8px",borderRadius:3,background:G.goldDim,
+                  border:`1px solid ${G.goldMid}`,color:G.gold,fontSize:11,fontWeight:600,cursor:"pointer"}}>
+                🍳 COCINAR ESTA RECETA
+              </button>
+            )}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COCINA — calculador de porciones, info nutricional escalada, verificación de Stock
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion }) {
+  const [receta, setReceta] = useState(recetaSeleccionada || null);
+  const [porcionesDeseadas, setPorcionesDeseadas] = useState(String(recetaSeleccionada?.porcionesBase || 4));
+  const [stock, setStock] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [descontado, setDescontado] = useState(false);
+
+  useEffect(() => {
+    if (!firebaseOk) { setLoading(false); return; }
+    getDoc(doc(db, vpStockPath())).then(snap => {
+      setStock(snap.exists() ? snap.data().items || [] : []);
+      setLoading(false);
+    }).catch(()=>setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (recetaSeleccionada) {
+      setReceta(recetaSeleccionada);
+      setPorcionesDeseadas(String(recetaSeleccionada.porcionesBase || 4));
+      setDescontado(false);
+    }
+  }, [recetaSeleccionada]);
+
+  if (!receta) {
+    return (
+      <div style={{minHeight:"100vh",background:G.bg,fontFamily:"system-ui,sans-serif",
+        padding:"24px 16px 56px",maxWidth:430,margin:"0 auto"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+          <button onClick={onBack} style={S.btn(false,false)}>← Nutrición</button>
+        </div>
+        <div style={{textAlign:"center",marginBottom:24}}>
+          <div style={{fontSize:28,marginBottom:6}}>🍳</div>
+          <div style={{fontSize:14,fontWeight:700,color:G.text,letterSpacing:1,fontFamily:"'Courier New',monospace"}}>
+            COCINA
+          </div>
+          <div style={{fontSize:11,color:G.textDim,marginTop:6}}>
+            Elegí una receta para calcular porciones y verificar tu stock
+          </div>
+        </div>
+        <button onClick={onVerRecetas}
+          style={{width:"100%",padding:"12px",borderRadius:3,background:G.goldDim,
+            border:`1px solid ${G.goldMid}`,color:G.gold,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+          📖 IR A RECETAS
+        </button>
+      </div>
+    );
+  }
+
+  const porciones = parseFloat(porcionesDeseadas) || 0;
+  const factor = receta.porcionesBase > 0 ? porciones / receta.porcionesBase : 0;
+
+  const nutricionTotal = {
+    kcal: receta.nutricion.kcal * factor,
+    carbs: receta.nutricion.carbs * factor,
+    prot: receta.nutricion.prot * factor,
+    grasas: receta.nutricion.grasas * factor,
+  };
+  const nutricionPorPorcion = porciones > 0 ? {
+    kcal: nutricionTotal.kcal / porciones,
+    carbs: nutricionTotal.carbs / porciones,
+    prot: nutricionTotal.prot / porciones,
+    grasas: nutricionTotal.grasas / porciones,
+  } : { kcal:0, carbs:0, prot:0, grasas:0 };
+
+  // Verificación contra Stock — cuánto necesito vs cuánto tengo
+  const verificacion = receta.ingredientes.map(ing => {
+    const necesario = ing.cantidad * factor;
+    const key = vpNormalizarNombre(ing.nombre);
+    const enStock = stock.find(s => vpNormalizarNombre(s.nombre)===key && s.unidad===ing.unidad);
+    const disponible = enStock?.cantidad || 0;
+    const falta = Math.max(0, necesario - disponible);
+    return { ...ing, necesario, disponible, falta, alcanza: falta===0 };
+  });
+  const faltantes = verificacion.filter(v=>!v.alcanza);
+  const todoDisponible = faltantes.length===0;
+
+  async function descontarDeStock() {
+    if (!firebaseOk || descontado) return;
+    let nuevoStock = [...stock];
+    verificacion.forEach(v => {
+      const key = vpNormalizarNombre(v.nombre);
+      const idx = nuevoStock.findIndex(s=>vpNormalizarNombre(s.nombre)===key && s.unidad===v.unidad);
+      if (idx>=0) {
+        nuevoStock[idx] = { ...nuevoStock[idx], cantidad: Math.max(0, nuevoStock[idx].cantidad - v.necesario), actualizado:Date.now() };
+      }
+    });
+    setStock(nuevoStock);
+    try { await setDoc(doc(db, vpStockPath()), { items: nuevoStock }); } catch(e) {}
+    setDescontado(true);
+  }
+
+  const fmt = n => n.toLocaleString("es-AR",{minimumFractionDigits:0,maximumFractionDigits:1});
+
+  return (
+    <div style={{minHeight:"100vh",background:G.bg,fontFamily:"system-ui,sans-serif",
+      padding:"24px 16px 56px",maxWidth:430,margin:"0 auto"}}>
+
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+        <button onClick={()=>{setReceta(null);onLimpiarSeleccion?.();}} style={S.btn(false,false)}>← Recetas</button>
+        <button onClick={onBack} style={{...S.btn(false,false),marginLeft:"auto"}}>Salir</button>
+      </div>
+
+      <div style={{textAlign:"center",marginBottom:16}}>
+        <div style={{fontSize:28,marginBottom:6}}>🍳</div>
+        <div style={{fontSize:14,fontWeight:700,color:G.text,letterSpacing:1}}>{receta.nombre.toUpperCase()}</div>
+      </div>
+
+      {/* Selector de porciones */}
+      <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:14}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>PORCIONES A COCINAR</div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <button onClick={()=>setPorcionesDeseadas(String(Math.max(1,porciones-1)))}
+            style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
+              color:G.text,fontSize:18,cursor:"pointer"}}>−</button>
+          <input value={porcionesDeseadas} onChange={e=>setPorcionesDeseadas(e.target.value)}
+            type="text" inputMode="decimal"
+            style={{flex:1,fontSize:22,fontWeight:700,textAlign:"center",
+              border:`1px solid ${G.border}`,borderRadius:3,padding:"8px",
+              background:G.surf2,color:G.gold,outline:"none",fontFamily:"inherit"}}/>
+          <button onClick={()=>setPorcionesDeseadas(String(porciones+1))}
+            style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
+              color:G.text,fontSize:18,cursor:"pointer"}}>+</button>
+        </div>
+        <div style={{fontSize:10,color:G.textDim,marginTop:6,textAlign:"center"}}>
+          Receta original rinde {receta.porcionesBase} porciones
+        </div>
+      </div>
+
+      {/* Información nutricional */}
+      <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:14}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:10}}>INFORMACIÓN NUTRICIONAL</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          <div>
+            <div style={{fontSize:9,color:G.textDim,marginBottom:6,letterSpacing:1}}>POR PORCIÓN</div>
+            {[["Kcal",nutricionPorPorcion.kcal,""],["Carbs",nutricionPorPorcion.carbs,"g"],
+              ["Prot",nutricionPorPorcion.prot,"g"],["Grasas",nutricionPorPorcion.grasas,"g"]].map(([lbl,val,u])=>(
+              <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"3px 0"}}>
+                <span style={{color:G.textSec}}>{lbl}</span>
+                <span style={{color:G.text,fontWeight:600}}>{fmt(val)}{u}</span>
+              </div>
+            ))}
+          </div>
+          <div>
+            <div style={{fontSize:9,color:G.textDim,marginBottom:6,letterSpacing:1}}>TOTAL ({fmt(porciones)} porc.)</div>
+            {[["Kcal",nutricionTotal.kcal,""],["Carbs",nutricionTotal.carbs,"g"],
+              ["Prot",nutricionTotal.prot,"g"],["Grasas",nutricionTotal.grasas,"g"]].map(([lbl,val,u])=>(
+              <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"3px 0"}}>
+                <span style={{color:G.textSec}}>{lbl}</span>
+                <span style={{color:G.gold,fontWeight:600}}>{fmt(val)}{u}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Verificación de stock */}
+      <div style={{border:`1px solid ${todoDisponible?"#7AB85A44":"#C9724C44"}`,borderRadius:4,
+        padding:"14px",background:todoDisponible?G.okBg:"#1a050008",marginBottom:14}}>
+        <div style={{fontSize:9,color:todoDisponible?"#7AB85A":"#C9724C",letterSpacing:2,marginBottom:10}}>
+          {todoDisponible ? "✓ TENÉS TODO EN STOCK" : `⚠ FALTAN ${faltantes.length} INGREDIENTE${faltantes.length>1?"S":""}`}
+        </div>
+        {verificacion.map((v,i) => (
+          <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+            padding:"6px 0",borderBottom:i<verificacion.length-1?`1px solid ${G.border}`:"none"}}>
+            <span style={{fontSize:12,color:G.text,textTransform:"capitalize"}}>{v.nombre}</span>
+            <div style={{textAlign:"right"}}>
+              <span style={{fontSize:11,color:v.alcanza?"#7AB85A":"#C9724C",fontWeight:600}}>
+                {fmt(v.necesario)} {VP_UNIDADES.find(u=>u.id===v.unidad)?.label}
+              </span>
+              {!v.alcanza && (
+                <div style={{fontSize:9,color:"#C9724C"}}>
+                  faltan {fmt(v.falta)} {VP_UNIDADES.find(u=>u.id===v.unidad)?.label}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Botón cocinar — descuenta del stock */}
+      <button onClick={descontarDeStock} disabled={descontado}
+        style={{width:"100%",padding:"12px",borderRadius:3,
+          background:descontado?G.surf2:G.gold,
+          border:descontado?`1px solid ${G.border}`:"none",
+          color:descontado?G.textDim:G.bg,fontSize:13,fontWeight:700,letterSpacing:1,
+          cursor:descontado?"default":"pointer"}}>
+        {descontado ? "✓ DESCONTADO DEL STOCK" : "🍳 COCINAR Y DESCONTAR DEL STOCK"}
+      </button>
+      <div style={{fontSize:10,color:G.textDim,marginTop:8,textAlign:"center"}}>
+        Si algo no coincide, podés ajustarlo manualmente después en 📦 Stock
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // PANTALLA DE SELECCIÓN — 5 PILARES
 // ═══════════════════════════════════════════════════════════════════════════════
 function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros }) {
@@ -1137,7 +1928,7 @@ function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros }) 
   const [scores, setScores] = useState({});
   const [rachas, setRachas] = useState({});
   const [mesActual]         = useState(() => hoyVp().mesId);
-  const CODIGOS = { FE:"fe", TRADING:"trading", HOGAR:"hogar", FIT:"nutricion", VISION:"vision" };
+  const CODIGOS = { FE:"fe", TRADING:"trading", HOGAR:"hogar", FIT:"fitness", NUTR:"nutricion", VISION:"vision" };
 
   useEffect(() => {
     if (!firebaseOk) return;
@@ -1187,14 +1978,15 @@ function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros }) 
   function entrar() {
     const k = codigo.toUpperCase().trim();
     if (CODIGOS[k]) { onSelect(CODIGOS[k]); setErr(""); }
-    else setErr("Código no válido · FE · TRADING · HOGAR · FIT · VISION");
+    else setErr("Código no válido · FE · TRADING · HOGAR · FIT · NUTR · VISION");
   }
 
   const DESC = {
     fe:"Jarvis Wake Up · Salmos 119:97 · Intención del día",
     trading:"Cuenta de fondeo EUR/DOL · Registro de operaciones",
     hogar:"Orden, limpieza y preparación del entorno",
-    nutricion:"CrossFit · 2 Tuppers + Desayuno · Macros · Peso",
+    fitness:"CrossFit · WOD · Fuerza · Peso corporal",
+    nutricion:"2 Tuppers + Desayuno · Macros · Cocina · Stock",
     vision:'"El Loco" · Acción diaria · Tapas 2',
   };
 
@@ -1270,7 +2062,7 @@ function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros }) 
       {VP_PILARES.map(p => {
         const sc = scores[p.id];
         const pct = sc?.pct || 0;
-        const cod = p.id==="nutricion"?"FIT":p.id.toUpperCase();
+        const cod = p.id==="fitness"?"FIT":p.id==="nutricion"?"NUTR":p.id.toUpperCase();
         const pctColor = pct===0?G.textDim:pct<50?"#C9724C":pct<80?G.gold:G.ok;
         const racha = rachas[p.id] || 0;
         return (
@@ -1388,7 +2180,7 @@ function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros }) 
         <div style={{display:"flex",gap:6}}>
           <input value={codigo} onChange={e=>setCodigo(e.target.value.toUpperCase())}
             onKeyDown={e=>e.key==="Enter"&&entrar()}
-            placeholder="FE · TRADING · HOGAR · FIT · VISION"
+            placeholder="FE · TRADING · HOGAR · FIT · NUTR · VISION"
             style={{...S.inp(false),letterSpacing:2,fontSize:12}}/>
           <button onClick={entrar}
             style={{padding:"8px 16px",borderRadius:3,background:G.gold,
@@ -1745,7 +2537,7 @@ function VpLogrosScreen({ onBack }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // REGISTRO DIARIO DE UN PILAR
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpPilarDia({ pilar, datos, onChange }) {
+function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock }) {
   const [habitos, setHabitos] = useState(datos?.habitos || {});
   const [nota, setNota]       = useState(datos?.nota || "");
   // fitness extras
@@ -1933,6 +2725,39 @@ function VpPilarDia({ pilar, datos, onChange }) {
             </>
           )}
 
+          {/* Peso */}
+          <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
+            <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6}}>PESO CORPORAL HOY (KG)</div>
+            <input type="number" step="0.1" value={peso} onChange={e=>setPeso(e.target.value)}
+              placeholder="95.0"
+              style={{...S.inp(false),fontSize:18,textAlign:"center",fontWeight:600,color:G.gold}}/>
+            <div style={{fontSize:10,color:G.textDim,marginTop:6,fontFamily:"system-ui,sans-serif"}}>
+              Registrá en ayunas, mismo horario siempre
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── NUTRICIÓN EXTRA ─────────────────────────────────────────────────── */}
+      {pilar.esNutricion && (
+        <>
+          {/* Accesos a Cocina / Recetas / Stock */}
+          <div style={{display:"flex",gap:6,marginBottom:8}}>
+            <button onClick={()=>onAbrirCocina?.()}
+              style={{flex:1,padding:"10px 6px",borderRadius:3,
+                border:`1px solid ${G.border}`,background:G.surf,
+                color:G.textSec,fontSize:11,fontWeight:600,cursor:"pointer",
+                touchAction:"manipulation",WebkitTapHighlightColor:"transparent"}}>
+              🍳 COCINA
+            </button>
+            <button onClick={()=>onAbrirStock?.()}
+              style={{flex:1,padding:"10px 6px",borderRadius:3,
+                border:`1px solid ${G.border}`,background:G.surf,
+                color:G.textSec,fontSize:11,fontWeight:600,cursor:"pointer",
+                touchAction:"manipulation",WebkitTapHighlightColor:"transparent"}}>
+              📦 STOCK
+            </button>
+          </div>
 
           {/* Desayuno fijo */}
           <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
@@ -2007,17 +2832,6 @@ function VpPilarDia({ pilar, datos, onChange }) {
               </div>
             ))}
           </div>
-
-          {/* Peso */}
-          <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
-            <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6}}>PESO CORPORAL HOY (KG)</div>
-            <input type="number" step="0.1" value={peso} onChange={e=>setPeso(e.target.value)}
-              placeholder="95.0"
-              style={{...S.inp(false),fontSize:18,textAlign:"center",fontWeight:600,color:G.gold}}/>
-            <div style={{fontSize:10,color:G.textDim,marginTop:6,fontFamily:"system-ui,sans-serif"}}>
-              Registrá en ayunas, mismo horario siempre
-            </div>
-          </div>
         </>
       )}
     </div>
@@ -2027,7 +2841,7 @@ function VpPilarDia({ pilar, datos, onChange }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // DÍA COMPLETO — todos los pilares con tabs
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpDayView({ mesId, wIdx, dIdx, pilarInicial, onBack }) {
+function VpDayView({ mesId, wIdx, dIdx, pilarInicial, onBack, onAbrirCocina, onAbrirStock }) {
   const [pilarActivo, setPilarActivo] = useState(pilarInicial || "fe");
   const [datos, setDatos]             = useState({});
   const [loading, setLoading]         = useState(true);
@@ -2121,6 +2935,8 @@ function VpDayView({ mesId, wIdx, dIdx, pilarInicial, onBack }) {
           pilar={pilar}
           datos={datos[pilarActivo]}
           onChange={d => guardar(pilarActivo, d)}
+          onAbrirCocina={onAbrirCocina}
+          onAbrirStock={onAbrirStock}
         />
       )}
     </div>
@@ -2537,6 +3353,10 @@ function VpApp() {
   const [pilarInicial, setPilarInicial] = useState(null);
   const [mostrarCompras, setMostrarCompras] = useState(false);
   const [mostrarLogros, setMostrarLogros]   = useState(false);
+  const [mostrarStock, setMostrarStock]     = useState(false);
+  const [mostrarCocina, setMostrarCocina]   = useState(false);
+  const [mostrarRecetas, setMostrarRecetas] = useState(false);
+  const [recetaParaCocinar, setRecetaParaCocinar] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [nav, setNav]     = useState("month"); // month | week | day
   const [wIdx, setWIdx]   = useState(0);
@@ -2554,7 +3374,33 @@ function VpApp() {
 
   // Lista de compras — pantalla independiente, transversal a los pilares
   if (mostrarCompras) {
-    return <VpListaCompras onBack={() => setMostrarCompras(false)} />;
+    return <VpListaCompras
+      onBack={() => setMostrarCompras(false)}
+      onAbrirStock={() => { setMostrarCompras(false); setMostrarStock(true); }}
+    />;
+  }
+
+  // Stock de alimentos — pantalla independiente
+  if (mostrarStock) {
+    return <VpStock onBack={() => setMostrarStock(false)} />;
+  }
+
+  // Recetas — pantalla independiente, conecta hacia Cocina al elegir "cocinar esta receta"
+  if (mostrarRecetas) {
+    return <VpRecetasScreen
+      onBack={() => setMostrarRecetas(false)}
+      onUsarReceta={(r) => { setRecetaParaCocinar(r); setMostrarRecetas(false); setMostrarCocina(true); }}
+    />;
+  }
+
+  // Cocina — calculador de porciones + verificación de stock
+  if (mostrarCocina) {
+    return <VpCocina
+      onBack={() => { setMostrarCocina(false); setRecetaParaCocinar(null); }}
+      onVerRecetas={() => { setMostrarCocina(false); setMostrarRecetas(true); }}
+      recetaSeleccionada={recetaParaCocinar}
+      onLimpiarSeleccion={() => setRecetaParaCocinar(null)}
+    />;
   }
 
   // Trofeos / logros — pantalla independiente, transversal a los pilares
@@ -2670,6 +3516,8 @@ function VpApp() {
             dIdx={dIdx}
             pilarInicial={pilarInicial}
             onBack={()=>setNav("week")}
+            onAbrirCocina={()=>setMostrarCocina(true)}
+            onAbrirStock={()=>setMostrarStock(true)}
           />
         )}
       </div>
