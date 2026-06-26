@@ -3211,11 +3211,13 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
   const datosRef = useRef(null);
 
   // Si "datos" llega o cambia desde afuera (ej: Firebase respondió después del montaje),
-  // sincronizamos el estado local UNA SOLA VEZ por cada "datos" distinto que llegue,
-  // así nunca pisamos con el valor inicial vacío.
+  // sincronizamos el estado local. Comparamos por CONTENIDO (no por referencia), porque
+  // el padre recrea el objeto "datos" en cada guardado — si comparáramos por referencia,
+  // cada tecla escrita generaría un loop infinito: guardar → nueva referencia → re-sync → re-guardar.
+  const datosStr = JSON.stringify(datos);
   useEffect(() => {
-    if (datos !== datosRef.current) {
-      datosRef.current = datos;
+    if (datosStr !== datosRef.current) {
+      datosRef.current = datosStr;
       setHabitos(datos?.habitos || {});
       setNota(datos?.nota || "");
       setTipoDia(datos?.tipoDia || "entreno");
@@ -3227,7 +3229,7 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
       setCantOperaciones(datos?.cantOperaciones || "");
       setListo(true);
     }
-  }, [datos]);
+  }, [datosStr]);
 
   useEffect(() => {
     if (!listo) return; // no guardar hasta que el estado esté sincronizado con datos reales
@@ -3235,6 +3237,11 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
     if (pilar.esFitness) Object.assign(payload, { tipoDia, peso, wod });
     if (pilar.esNutricion) Object.assign(payload, { tuppersConsumidos });
     if (pilar.esTrading) Object.assign(payload, { resultadoUSD, equityCuenta, cantOperaciones });
+    // Evitamos guardar si el payload es idéntico a lo que ya está sincronizado —
+    // esto corta el loop en su origen: no disparamos onChange si no hay cambio real.
+    const payloadStr = JSON.stringify(payload);
+    if (payloadStr === datosRef.current) return;
+    datosRef.current = payloadStr;
     onChange(payload);
   }, [listo, habitos, nota, tipoDia, peso, wod, tuppersConsumidos, resultadoUSD, equityCuenta, cantOperaciones]);
 
