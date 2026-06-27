@@ -1648,7 +1648,7 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
           model:"claude-sonnet-4-6",
-          max_tokens:1000,
+          max_tokens:1500,
           messages:[{
             role:"user",
             content:[
@@ -1665,11 +1665,33 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
           }]
         })
       });
+
+      if (!response.ok) {
+        let detalle = `HTTP ${response.status}`;
+        try { const errBody = await response.json(); detalle = errBody?.error?.message || detalle; } catch(_){}
+        throw new Error(`La API respondió con error: ${detalle}`);
+      }
+
       const data = await response.json();
+      if (data?.error) throw new Error(data.error.message || "La API devolvió un error");
+
       const textBlock = (data.content||[]).find(c=>c.type==="text");
-      if (!textBlock) throw new Error("La IA no devolvió texto");
-      const limpio = textBlock.text.replace(/```json|```/g,"").trim();
-      const parsed = JSON.parse(limpio);
+      if (!textBlock || !textBlock.text) throw new Error("La respuesta no contenía texto interpretable");
+
+      let textoLimpio = textBlock.text.replace(/```json|```/g,"").trim();
+      const inicio = textoLimpio.indexOf("{");
+      const fin = textoLimpio.lastIndexOf("}");
+      if (inicio === -1 || fin === -1 || fin <= inicio) {
+        throw new Error("La IA no devolvió un JSON reconocible");
+      }
+      textoLimpio = textoLimpio.slice(inicio, fin+1);
+
+      let parsed;
+      try {
+        parsed = JSON.parse(textoLimpio);
+      } catch(parseErr) {
+        throw new Error("El JSON devuelto no es válido: " + parseErr.message);
+      }
 
       setNombre(parsed.nombre || "");
       setPorcionesBase(String(parsed.porcionesBase || 4));
@@ -1682,7 +1704,7 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
       setGrasas(String(parsed.nutricion?.grasas??""));
       setNutricionManual(true);
     } catch(e) {
-      setErrorIA("No se pudo procesar el archivo automáticamente. Cargá los datos manualmente abajo.");
+      setErrorIA(`No se pudo procesar el archivo: ${e.message || "error desconocido"}. Cargá los datos manualmente abajo.`);
     } finally {
       setProcesando(false);
     }
@@ -2281,30 +2303,70 @@ function VpTablaNutricional({ onBack }) {
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
           model:"claude-sonnet-4-6",
-          max_tokens:2000,
+          max_tokens:4000,
           messages:[{
             role:"user",
             content:[
               contentBlock,
               { type:"text", text:
-                "Extraé TODOS los alimentos de esta tabla nutricional. Para cada uno necesito: " +
-                "nombre del alimento, y sus valores nutricionales normalizados a cada 100g en crudo " +
-                "(si la tabla usa otra base, convertí el valor a 100g). Necesito: proteína (g), " +
-                "calorías (kcal), carbohidratos (g), grasa (g). " +
-                "Respondé ÚNICAMENTE con un JSON válido, sin texto adicional, sin markdown, con esta forma exacta: " +
+                "Esta imagen o documento contiene una o más tablas de información nutricional o composición " +
+                "de alimentos. Extraé TODOS los alimentos/filas de datos que encuentres (ignorá encabezados, " +
+                "notas al pie, y filas que sean solo categorías sin valores numéricos). " +
+                "Para cada alimento necesito: nombre, y sus valores nutricionales normalizados a cada 100g. " +
+                "Si la tabla tiene variantes (ej: 'con piel' / 'sin piel', o distintos cortes), generá una fila " +
+                "separada por cada variante, usando un nombre descriptivo que las distinga " +
+                "(ej: 'Pechuga de pollo sin piel', 'Pechuga de pollo con piel'). " +
+                "Si un dato no está disponible o no aplica, usá 0. " +
+                "Convertí cualquier valor que no esté en base 100g a base 100g. " +
+                "Necesito estos 4 campos por alimento: prot (proteína en g), kcal (calorías), " +
+                "carbs (carbohidratos en g), grasas (grasa en g). " +
+                "Respondé ÚNICAMENTE con un JSON válido, sin texto adicional antes ni después, sin markdown, " +
+                "con esta forma exacta: " +
                 '{"alimentos":[{"nombre":"...","prot":0,"kcal":0,"carbs":0,"grasas":0}]}'
               }
             ]
           }]
         })
       });
+
+      if (!response.ok) {
+        let detalle = `HTTP ${response.status}`;
+        try { const errBody = await response.json(); detalle = errBody?.error?.message || detalle; } catch(_){}
+        throw new Error(`La API respondió con error: ${detalle}`);
+      }
+
       const data = await response.json();
+
+      if (data?.error) {
+        throw new Error(data.error.message || "La API devolvió un error");
+      }
+
       const textBlock = (data.content||[]).find(c=>c.type==="text");
-      if (!textBlock) throw new Error("La IA no devolvió texto");
-      const limpio = textBlock.text.replace(/```json|```/g,"").trim();
-      const parsed = JSON.parse(limpio);
+      if (!textBlock || !textBlock.text) {
+        throw new Error("La respuesta no contenía texto interpretable");
+      }
+
+      // El JSON puede venir envuelto en markdown o con texto alrededor a pesar de la instrucción.
+      // Buscamos el primer '{' y el último '}' para extraer solo el bloque JSON.
+      let textoLimpio = textBlock.text.replace(/```json|```/g,"").trim();
+      const inicio = textoLimpio.indexOf("{");
+      const fin = textoLimpio.lastIndexOf("}");
+      if (inicio === -1 || fin === -1 || fin <= inicio) {
+        throw new Error("La IA no devolvió un JSON reconocible");
+      }
+      textoLimpio = textoLimpio.slice(inicio, fin+1);
+
+      let parsed;
+      try {
+        parsed = JSON.parse(textoLimpio);
+      } catch(parseErr) {
+        throw new Error("El JSON devuelto no es válido: " + parseErr.message);
+      }
+
       const nuevosAlimentos = parsed.alimentos || [];
-      if (nuevosAlimentos.length === 0) throw new Error("No se reconoció ningún alimento");
+      if (nuevosAlimentos.length === 0) {
+        throw new Error("No se reconoció ningún alimento en la tabla. Probá una foto más clara o con mejor encuadre.");
+      }
 
       // Mezclamos: si el nombre ya existe (match exacto normalizado), actualizamos sus valores;
       // si es nuevo, lo agregamos.
@@ -2325,7 +2387,7 @@ function VpTablaNutricional({ onBack }) {
       await persistir(tablaActualizada);
       setResultadoIA(`✓ ${agregados} alimentos agregados · ${actualizados} actualizados`);
     } catch(e) {
-      setErrorIA("No se pudo procesar el archivo. Probá con otra foto más clara, o cargá los datos manualmente.");
+      setErrorIA(`No se pudo procesar el archivo: ${e.message || "error desconocido"}. Podés cargar los datos manualmente abajo.`);
     } finally {
       setProcesandoIA(false);
     }
