@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp, getApps } from "firebase/app";
 import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "firebase/firestore";
+import * as XLSX from "xlsx";
 
 // ─── FIREBASE CONFIG ──────────────────────────────────────────────────────────
 const FIREBASE_CONFIG = {
@@ -678,6 +679,129 @@ function vpNormalizarNombre(texto) {
 // Sectores de compra que efectivamente alimentan el Stock de alimentos
 // (Auto y Pendientes no son comida, así que no impactan en Stock/Nutrición)
 const VP_SECTORES_ALIMENTO = ["verduleria","carniceria","supermercado"];
+
+// Traduce errores técnicos de la llamada a la API a un mensaje honesto.
+// "Failed to fetch" específicamente significa que el navegador bloqueó la
+// petición antes de obtener respuesta (típicamente CORS) — pasa cuando la app
+// corre en un dominio propio (ej: Vercel) en vez de dentro de claude.ai, porque
+// ahí no hay credenciales ni proxy autorizado para llamar a la API directamente.
+function vpMensajeErrorIA(e) {
+  const msg = e?.message || "";
+  if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || e?.name === "TypeError") {
+    return "La carga automática por IA solo funciona cuando esta app corre dentro de claude.ai. " +
+      "Como está deployada en Vercel, el navegador no tiene permiso para llamar directo a la API " +
+      "de Anthropic (bloqueo de seguridad del navegador). Cargá los datos manualmente abajo — funciona igual.";
+  }
+  return `No se pudo procesar el archivo: ${msg || "error desconocido"}. Cargá los datos manualmente abajo.`;
+}
+
+// Alias de columnas posibles en un Excel de tabla nutricional, para detectar
+// automáticamente cuál es cuál sin importar el nombre exacto que uses.
+const VP_ALIAS_COLUMNAS = {
+  nombre: ["alimento","nombre","producto","ingrediente","item","alimento (100g en crudo)"],
+  prot:   ["proteina","proteína","prot","protein","proteina (g)","proteína (g)"],
+  kcal:   ["calorias","calorías","kcal","energia","energía","calorias (kcal)","energía (kcal)"],
+  carbs:  ["carbohidratos","carbs","hidratos","hidratos de carbono","carbohidratos (g)"],
+  grasas: ["grasa","grasas","fat","lipidos","lípidos","grasa (g)","grasas (g)"],
+};
+
+// Limpia un valor de celda que puede venir como número, texto con unidad ("23,7 g"),
+// o con separador decimal coma. Devuelve null si no es interpretable como número.
+function vpLimpiarNumeroExcel(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number") return v;
+  const s = String(v).replace(/[a-zA-Zé°%]/g,"").replace(",",".").trim();
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+// Busca, dentro de una fila de encabezados, qué columna corresponde a cada campo
+// nutricional, comparando contra los alias conocidos (insensible a mayúsculas/acentos).
+function vpDetectarColumnas(filaEncabezados) {
+  const normalizados = filaEncabezados.map(h => vpNormalizarNombre(String(h||"")));
+  const mapeo = {};
+  Object.entries(VP_ALIAS_COLUMNAS).forEach(([campo, alias]) => {
+    for (let i=0; i<normalizados.length; i++) {
+      if (alias.some(a => normalizados[i].includes(vpNormalizarNombre(a)))) {
+        mapeo[campo] = i;
+        break;
+      }
+    }
+  });
+  return mapeo;
+}
+
+// Parsea un archivo .xlsx/.xls/.csv completo (todas las hojas) y devuelve una lista
+// de alimentos { nombre, prot, kcal, carbs, grasas }. Recorre cada hoja buscando,
+// fila por fila, una fila de encabezados reconocible; una vez la encuentra, lee
+// todas las filas de datos que sigan hasta que la fila de nombre quede vacía dos
+// veces seguidas (así tolera bloques separados como tu Excel de pollo/verduras/frutas).
+function vpParsearExcelNutricional(workbook) {
+  const alimentos = [];
+  workbook.SheetNames.forEach(sheetName => {
+    const sheet = workbook.Sheets[sheetName];
+    const filas = XLSX.utils.sheet_to_json(sheet, { header:1, defval:"" });
+
+    let columnas = null;
+    let vaciasSeguidas = 0;
+
+    for (let i=0; i<filas.length; i++) {
+      const fila = filas[i];
+      if (!fila || fila.every(c=>String(c).trim()==="")) continue;
+
+      // ¿Esta fila es un encabezado nuevo? (tiene al menos "nombre" + 1 campo numérico)
+      const posiblesCols = vpDetectarColumnas(fila);
+      if (posiblesCols.nombre != null && Object.keys(posiblesCols).length >= 2) {
+        columnas = posiblesCols;
+        vaciasSeguidas = 0;
+        continue;
+      }
+
+      // Si todavía no detectamos columnas en esta hoja, seguimos buscando encabezado
+      if (!columnas) continue;
+
+      const nombre = String(fila[columnas.nombre]||"").trim();
+      if (!nombre) { vaciasSeguidas++; if (vaciasSeguidas>=2) columnas=null; continue; }
+      vaciasSeguidas = 0;
+
+      const prot   = columnas.prot!=null   ? vpLimpiarNumeroExcel(fila[columnas.prot])   : null;
+      const kcal   = columnas.kcal!=null   ? vpLimpiarNumeroExcel(fila[columnas.kcal])   : null;
+      const carbs  = columnas.carbs!=null  ? vpLimpiarNumeroExcel(fila[columnas.carbs])  : null;
+      const grasas = columnas.grasas!=null ? vpLimpiarNumeroExcel(fila[columnas.grasas]) : null;
+
+      // Si no se pudo leer ningún valor numérico, no es una fila de datos válida
+      // (puede ser una nota al pie, un título de sección, etc.)
+      if (prot==null && kcal==null && carbs==null && grasas==null) continue;
+
+      alimentos.push({
+        nombre, prot: prot||0, kcal: kcal||0, carbs: carbs||0, grasas: grasas||0,
+      });
+    }
+  });
+  return alimentos;
+}
+
+// Mezcla una lista de alimentos nuevos dentro de la tabla existente.
+// Regla de compatibilidad: si el nombre normalizado ya existe en la tabla,
+// el registro existente se REEMPLAZA por completo con los datos nuevos
+// (la carga más reciente siempre gana, sin generar duplicados como
+// "Pechuga de Pollo" x2 con valores distintos). Si es un nombre nuevo, se agrega.
+function vpFusionarAlimentos(tablaActual, alimentosNuevos) {
+  let resultado = [...tablaActual];
+  let agregados = 0, actualizados = 0;
+  alimentosNuevos.forEach(al => {
+    if (!al.nombre) return;
+    const key = vpNormalizarNombre(al.nombre);
+    const idx = resultado.findIndex(a => vpNormalizarNombre(a.nombre)===key);
+    const item = {
+      id: idx>=0 ? resultado[idx].id : `${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      nombre: al.nombre, prot: al.prot||0, kcal: al.kcal||0, carbs: al.carbs||0, grasas: al.grasas||0,
+    };
+    if (idx>=0) { resultado[idx] = item; actualizados++; }
+    else { resultado.push(item); agregados++; }
+  });
+  return { tabla: resultado, agregados, actualizados };
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TABLA NUTRICIONAL — valores por 100g en crudo/fresco
@@ -1704,7 +1828,7 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
       setGrasas(String(parsed.nutricion?.grasas??""));
       setNutricionManual(true);
     } catch(e) {
-      setErrorIA(`No se pudo procesar el archivo: ${e.message || "error desconocido"}. Cargá los datos manualmente abajo.`);
+      setErrorIA(vpMensajeErrorIA(e));
     } finally {
       setProcesando(false);
     }
@@ -2227,6 +2351,10 @@ function VpTablaNutricional({ onBack }) {
   const [errorIA, setErrorIA] = useState("");
   const [resultadoIA, setResultadoIA] = useState("");
   const fileInputRef = useRef(null);
+  const [procesandoExcel, setProcesandoExcel] = useState(false);
+  const [errorExcel, setErrorExcel] = useState("");
+  const [resultadoExcel, setResultadoExcel] = useState("");
+  const excelInputRef = useRef(null);
 
   useEffect(() => {
     vpCargarTablaNutricional().then(t => { setTabla(t); setLoading(false); });
@@ -2251,7 +2379,13 @@ function VpTablaNutricional({ onBack }) {
   function guardarEdicion() {
     const nombre = edCampos.nombre.trim();
     if (!nombre) return;
-    persistir(tabla.map(a => a.id===editandoId ? {
+    const key = vpNormalizarNombre(nombre);
+    // Si el nuevo nombre coincide con OTRO alimento ya existente (no el que estamos
+    // editando), eliminamos ese otro para no terminar con dos filas iguales —
+    // el dato editado ahora mismo es el que queda vigente.
+    const otroConMismoNombre = tabla.find(a => a.id!==editandoId && vpNormalizarNombre(a.nombre)===key);
+    let tablaActualizada = otroConMismoNombre ? tabla.filter(a=>a.id!==otroConMismoNombre.id) : tabla;
+    persistir(tablaActualizada.map(a => a.id===editandoId ? {
       ...a, nombre,
       prot: parseFloat(edCampos.prot.replace(",","."))||0,
       kcal: parseFloat(edCampos.kcal.replace(",","."))||0,
@@ -2269,14 +2403,15 @@ function VpTablaNutricional({ onBack }) {
     const nombre = nuevoCampos.nombre.trim();
     if (!nombre) return;
     const nuevo = {
-      id: `${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
       nombre,
       prot: parseFloat(nuevoCampos.prot.replace(",","."))||0,
       kcal: parseFloat(nuevoCampos.kcal.replace(",","."))||0,
       carbs: parseFloat(nuevoCampos.carbs.replace(",","."))||0,
       grasas: parseFloat(nuevoCampos.grasas.replace(",","."))||0,
     };
-    persistir([...tabla, nuevo]);
+    // Si ya existe un alimento con este nombre, lo reemplaza (no genera duplicado).
+    const { tabla: tablaActualizada } = vpFusionarAlimentos(tabla, [nuevo]);
+    persistir(tablaActualizada);
     setNuevoCampos({ nombre:"", prot:"", kcal:"", carbs:"", grasas:"" });
     setMostrarAgregar(false);
   }
@@ -2368,26 +2503,14 @@ function VpTablaNutricional({ onBack }) {
         throw new Error("No se reconoció ningún alimento en la tabla. Probá una foto más clara o con mejor encuadre.");
       }
 
-      // Mezclamos: si el nombre ya existe (match exacto normalizado), actualizamos sus valores;
-      // si es nuevo, lo agregamos.
-      let tablaActualizada = [...tabla];
-      let agregados = 0, actualizados = 0;
-      nuevosAlimentos.forEach(al => {
-        if (!al.nombre) return;
-        const key = vpNormalizarNombre(al.nombre);
-        const idx = tablaActualizada.findIndex(a=>vpNormalizarNombre(a.nombre)===key);
-        const item = {
-          id: idx>=0 ? tablaActualizada[idx].id : `${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
-          nombre: al.nombre, prot: al.prot||0, kcal: al.kcal||0, carbs: al.carbs||0, grasas: al.grasas||0,
-        };
-        if (idx>=0) { tablaActualizada[idx] = item; actualizados++; }
-        else { tablaActualizada.push(item); agregados++; }
-      });
+      // Fusión con la tabla existente: si el nombre ya existe, los datos nuevos
+      // reemplazan a los viejos (no se duplican alimentos).
+      const { tabla: tablaActualizada, agregados, actualizados } = vpFusionarAlimentos(tabla, nuevosAlimentos);
 
       await persistir(tablaActualizada);
       setResultadoIA(`✓ ${agregados} alimentos agregados · ${actualizados} actualizados`);
     } catch(e) {
-      setErrorIA(`No se pudo procesar el archivo: ${e.message || "error desconocido"}. Podés cargar los datos manualmente abajo.`);
+      setErrorIA(vpMensajeErrorIA(e));
     } finally {
       setProcesandoIA(false);
     }
@@ -2396,6 +2519,35 @@ function VpTablaNutricional({ onBack }) {
   function handleArchivo(e) {
     const file = e.target.files?.[0];
     if (file) procesarArchivoIA(file);
+  }
+
+  // Carga por Excel — se procesa 100% en el navegador con SheetJS, sin llamar
+  // a ningún servidor externo. No tiene el problema de CORS que tiene la IA
+  // cuando la app corre fuera de claude.ai (ej: en Vercel).
+  async function procesarExcel(file) {
+    setProcesandoExcel(true); setErrorExcel(""); setResultadoExcel("");
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type:"array" });
+      const alimentosNuevos = vpParsearExcelNutricional(workbook);
+
+      if (alimentosNuevos.length === 0) {
+        throw new Error("No se reconoció ninguna fila de alimentos. Verificá que el Excel tenga columnas como 'Alimento', 'Proteína', 'Calorías', 'Carbohidratos', 'Grasa'.");
+      }
+
+      const { tabla: tablaActualizada, agregados, actualizados } = vpFusionarAlimentos(tabla, alimentosNuevos);
+      await persistir(tablaActualizada);
+      setResultadoExcel(`✓ ${agregados} alimentos agregados · ${actualizados} actualizados (la carga más reciente reemplaza a la anterior)`);
+    } catch(e) {
+      setErrorExcel(`No se pudo leer el Excel: ${e.message || "error desconocido"}.`);
+    } finally {
+      setProcesandoExcel(false);
+    }
+  }
+
+  function handleArchivoExcel(e) {
+    const file = e.target.files?.[0];
+    if (file) procesarExcel(file);
   }
 
   const tablaFiltrada = busqueda.trim()
@@ -2429,7 +2581,23 @@ function VpTablaNutricional({ onBack }) {
         </div>
       </div>
 
-      {/* Carga por foto/PDF */}
+      {/* Carga por Excel — recomendada, funciona siempre */}
+      <div style={{border:`1px solid ${G.goldMid}`,borderRadius:4,padding:"14px",marginBottom:10,textAlign:"center"}}>
+        <input ref={excelInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleArchivoExcel} style={{display:"none"}}/>
+        <button onClick={()=>excelInputRef.current?.click()} disabled={procesandoExcel}
+          style={{padding:"10px 16px",borderRadius:3,background:procesandoExcel?G.surf2:G.gold,
+            border:"none",color:G.bg,fontSize:11,fontWeight:700,
+            cursor:procesandoExcel?"default":"pointer"}}>
+          {procesandoExcel ? "LEYENDO EXCEL…" : "📊 SUBIR EXCEL (.XLSX) DE TABLA NUTRICIONAL"}
+        </button>
+        {resultadoExcel && <div style={{fontSize:10,color:"#7AB85A",marginTop:8}}>{resultadoExcel}</div>}
+        {errorExcel && <div style={{fontSize:10,color:"#C9724C",marginTop:8}}>{errorExcel}</div>}
+        <div style={{fontSize:9,color:G.textDim,marginTop:8}}>
+          Se procesa en tu navegador, sin depender de la IA · columnas: Alimento, Proteína, Calorías, Carbohidratos, Grasa
+        </div>
+      </div>
+
+      {/* Carga por foto/PDF (requiere correr dentro de claude.ai) */}
       <div style={{border:`1px dashed ${G.border}`,borderRadius:4,padding:"14px",marginBottom:14,textAlign:"center"}}>
         <input ref={fileInputRef} type="file" accept="image/*,application/pdf" onChange={handleArchivo} style={{display:"none"}}/>
         <button onClick={()=>fileInputRef.current?.click()} disabled={procesandoIA}
