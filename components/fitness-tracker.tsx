@@ -643,11 +643,6 @@ function vpVersiculoPath(mesId, wIdx, dIdx) {
   return `vida_personal/${mesId}/semanas/semana_${wIdx+1}/dias/dia_${dIdx}`;
 }
 
-// ── Lista de compras — transversal, no pertenece a un día ni a un pilar ──────
-function vpComprasPath() {
-  return `vida_personal/_compras/lista/actual`;
-}
-
 // ── Stock de alimentos — se alimenta automáticamente desde Compras ──────────
 function vpStockPath() {
   return `vida_personal/_stock/items/actual`;
@@ -1135,154 +1130,313 @@ const VP_SECTORES_COMPRA = [
   { id:"pendientes",   label:"Pendientes",    emoji:"📌", color:"#C9A84C" },
 ];
 
+// ── Helpers de tiempo para compras ───────────────────────────────────────────
+// ID de la semana actual como "2026-W27" (ISO week-like, basado en domingo)
+function vpSemanaId(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  const ini = new Date(d); ini.setDate(d.getDate() - d.getDay()); ini.setHours(0,0,0,0);
+  return ini.toISOString().slice(0,10); // "2026-06-29" (domingo de la semana)
+}
+function vpMesId(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+function vpDiaNombre(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  return ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"][d.getDay()];
+}
+function vpFechaCorta(ts) {
+  const d = new Date(ts);
+  return `${d.getDate()}/${d.getMonth()+1}`;
+}
 function vpSemanaActual() {
   const d = new Date();
-  const ini = new Date(d); ini.setDate(d.getDate() - d.getDay());
-  ini.setHours(0,0,0,0);
+  const ini = new Date(d); ini.setDate(d.getDate() - d.getDay()); ini.setHours(0,0,0,0);
   return ini.getTime();
 }
 function vpMesActualTs() {
   const d = new Date();
   return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
 }
+// Paths de compras
+function vpComprasActivasPath()  { return `vida_personal/_compras/activos/lista`; }
+function vpComprasSemanaPath(sid) { return `vida_personal/_compras/semanas/${sid}`; }
+function vpComprasMesPath(mid)    { return `vida_personal/_compras/meses/${mid}`; }
 
 function VpListaCompras({ onBack, onAbrirStock }) {
-  const [items, setItems]     = useState([]); // [{ id, texto, monto, cantidad, unidad, sector, comprado, fechaComprado }]
-  const [nuevo, setNuevo]     = useState("");
+  // ── Items activos (pendientes de comprar o comprados recientemente) ──────────
+  const [items, setItems] = useState([]);
+  // ── Historial de la semana actual ────────────────────────────────────────────
+  const [semanaActual, setSemanaActual] = useState(null);
+  // ── Historial del mes actual (resumen de semanas) ────────────────────────────
+  const [mesActual, setMesActual] = useState(null);
+  // ── Semanas y meses pasados para el historial ────────────────────────────────
+  const [semanasHist, setSemanasHist] = useState([]);
+  const [mesesHist, setMesesHist] = useState([]);
+  const [vistaHistorial, setVistaHistorial] = useState(null); // "semanas" | "meses" | null
+  const [saveStatus, setSaveStatus] = useState("idle");
+  const [loading, setLoading] = useState(true);
+  // ── UI ───────────────────────────────────────────────────────────────────────
+  const [nuevo, setNuevo] = useState("");
   const [cantidadNueva, setCantidadNueva] = useState("");
   const [unidadNueva, setUnidadNueva] = useState("kg");
   const [montoNuevo, setMontoNuevo] = useState("");
   const [sectorActivo, setSectorActivo] = useState("verduleria");
-  const [loading, setLoading] = useState(true);
-  const [saveStatus, setSaveStatus] = useState("idle");
 
+  const sidActual = vpSemanaId();
+  const midActual = vpMesId();
+
+  // ── Carga inicial ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!firebaseOk) { setLoading(false); return; }
-    getDoc(doc(db, vpComprasPath())).then(snap => {
-      setItems(snap.exists() ? snap.data().items || [] : []);
+    Promise.all([
+      getDoc(doc(db, vpComprasActivasPath())),
+      getDoc(doc(db, vpComprasSemanaPath(sidActual))),
+      getDoc(doc(db, vpComprasMesPath(midActual))),
+    ]).then(([snapA, snapS, snapM]) => {
+      setItems(snapA.exists() ? snapA.data().items || [] : []);
+      setSemanaActual(snapS.exists() ? snapS.data() : { sid:sidActual, dias:{}, total:0 });
+      setMesActual(snapM.exists() ? snapM.data() : { mid:midActual, semanas:{}, total:0 });
       setLoading(false);
     }).catch(() => setLoading(false));
   }, []);
 
-  async function persistir(nuevaLista) {
+  // ── Persistir lista activa ────────────────────────────────────────────────────
+  async function persistirActivos(nuevaLista) {
     setItems(nuevaLista);
     if (!firebaseOk) return;
     setSaveStatus("saving");
     try {
-      await setDoc(doc(db, vpComprasPath()), { items: nuevaLista });
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus("idle"), 1500);
+      await setDoc(doc(db, vpComprasActivasPath()), { items: nuevaLista });
+      setSaveStatus("saved"); setTimeout(()=>setSaveStatus("idle"),1500);
     } catch(e) { setSaveStatus("error"); }
   }
 
-  // Suma (o crea) un producto en el Stock global, agrupado por nombre normalizado.
-  // Si ya existe el producto con la misma unidad, suma cantidades y promedia precio.
-  async function sumarAlStock(item) {
+  // ── Archivar un item comprado en el registro semanal/mensual ─────────────────
+  async function archivarCompra(item, ts) {
     if (!firebaseOk) return;
-    if (!VP_SECTORES_ALIMENTO.includes(item.sector)) return; // Auto/Pendientes no son comida
-    if (item.cantidad == null) return; // sin cantidad no hay nada que stockear
+    const sid  = vpSemanaId(ts);
+    const mid  = vpMesId(ts);
+    const dia  = vpDiaNombre(ts);
+    const monto = item.monto || 0;
 
-    try {
-      const snap = await getDoc(doc(db, vpStockPath()));
-      const stockActual = snap.exists() ? snap.data().items || [] : [];
-      const key = vpNormalizarNombre(item.texto);
-      const idx = stockActual.findIndex(s => vpNormalizarNombre(s.nombre)===key && s.unidad===item.unidad);
+    // Actualizar semana
+    const snapS = await getDoc(doc(db, vpComprasSemanaPath(sid)));
+    const sem = snapS.exists() ? snapS.data() : { sid, dias:{}, total:0 };
+    const diaData = sem.dias[dia] || { items:[], total:0 };
+    diaData.items = [...(diaData.items||[]), {
+      texto:item.texto, cantidad:item.cantidad, unidad:item.unidad,
+      monto, sector:item.sector, ts,
+    }];
+    diaData.total = (diaData.total||0) + monto;
+    sem.dias[dia] = diaData;
+    sem.total = (sem.total||0) + monto;
+    await setDoc(doc(db, vpComprasSemanaPath(sid)), sem);
+    if (sid===sidActual) setSemanaActual({...sem});
 
-      let nuevoStock;
-      if (idx >= 0) {
-        const existente = stockActual[idx];
-        const cantidadTotal = (existente.cantidad||0) + item.cantidad;
-        // Precio promedio ponderado si hay monto nuevo
-        let precioU = existente.precioUnitario || null;
-        if (item.monto != null && item.cantidad > 0) {
-          const precioNuevo = item.monto / item.cantidad;
-          precioU = precioU != null
-            ? ((precioU*(existente.cantidad||0)) + (precioNuevo*item.cantidad)) / cantidadTotal
-            : precioNuevo;
-        }
-        nuevoStock = [...stockActual];
-        nuevoStock[idx] = { ...existente, cantidad: cantidadTotal, precioUnitario: precioU,
-          sector: item.sector, actualizado: Date.now() };
-      } else {
-        const precioU = (item.monto != null && item.cantidad > 0) ? item.monto/item.cantidad : null;
-        nuevoStock = [...stockActual, {
-          id:`${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
-          nombre: item.texto, cantidad: item.cantidad, unidad: item.unidad,
-          precioUnitario: precioU, sector: item.sector, actualizado: Date.now(),
-        }];
-      }
-      await setDoc(doc(db, vpStockPath()), { items: nuevoStock });
-    } catch(e) {}
+    // Actualizar mes
+    const snapM = await getDoc(doc(db, vpComprasMesPath(mid)));
+    const mes = snapM.exists() ? snapM.data() : { mid, semanas:{}, total:0 };
+    mes.semanas[sid] = mes.semanas[sid] || { total:0, cantItems:0 };
+    mes.semanas[sid].total = (mes.semanas[sid].total||0) + monto;
+    mes.semanas[sid].cantItems = (mes.semanas[sid].cantItems||0) + 1;
+    mes.semanas[sid].sid = sid;
+    mes.total = (mes.total||0) + monto;
+    await setDoc(doc(db, vpComprasMesPath(mid)), mes);
+    if (mid===midActual) setMesActual({...mes});
   }
 
+  // ── Cargar historial de semanas/meses pasados ────────────────────────────────
+  async function cargarHistorialSemanas() {
+    if (!firebaseOk) return;
+    // Generamos los IDs de las últimas 8 semanas (incluyendo la actual)
+    const sids = [];
+    for (let i=0; i<8; i++) {
+      const d = new Date(); d.setDate(d.getDate() - (d.getDay() + 7*i));
+      d.setHours(0,0,0,0); sids.push(vpSemanaId(d.getTime()));
+    }
+    const snaps = await Promise.all(sids.map(sid => getDoc(doc(db, vpComprasSemanaPath(sid)))));
+    setSemanasHist(snaps.filter(s=>s.exists()).map(s=>s.data()).filter(s=>s.sid!==sidActual));
+  }
+
+  async function cargarHistorialMeses() {
+    if (!firebaseOk) return;
+    const mids = [];
+    for (let i=1; i<=6; i++) {
+      const d = new Date(); d.setMonth(d.getMonth()-i);
+      mids.push(vpMesId(d.getTime()));
+    }
+    const snaps = await Promise.all(mids.map(mid => getDoc(doc(db, vpComprasMesPath(mid)))));
+    setMesesHist(snaps.filter(s=>s.exists()).map(s=>s.data()));
+  }
+
+  // ── Sumar al Stock ────────────────────────────────────────────────────────────
+  async function sumarAlStock(item) {
+    if (!firebaseOk || !VP_SECTORES_ALIMENTO.includes(item.sector) || item.cantidad==null) return;
+    try {
+      const snap = await getDoc(doc(db, vpStockPath()));
+      const stockActual = snap.exists() ? snap.data().items||[] : [];
+      const key = vpNormalizarNombre(item.texto);
+      const idx = stockActual.findIndex(s=>vpNormalizarNombre(s.nombre)===key && s.unidad===item.unidad);
+      let nuevoStock;
+      if (idx>=0) {
+        const ex = stockActual[idx];
+        const cantTotal = (ex.cantidad||0)+item.cantidad;
+        let precioU = ex.precioUnitario||null;
+        if (item.monto!=null && item.cantidad>0) {
+          const pN = item.monto/item.cantidad;
+          precioU = precioU!=null ? ((precioU*(ex.cantidad||0))+(pN*item.cantidad))/cantTotal : pN;
+        }
+        nuevoStock=[...stockActual]; nuevoStock[idx]={...ex,cantidad:cantTotal,precioUnitario:precioU,actualizado:Date.now()};
+      } else {
+        const precioU=(item.monto!=null&&item.cantidad>0)?item.monto/item.cantidad:null;
+        nuevoStock=[...stockActual,{id:`${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+          nombre:item.texto,cantidad:item.cantidad,unidad:item.unidad,precioUnitario:precioU,sector:item.sector,actualizado:Date.now()}];
+      }
+      await setDoc(doc(db,vpStockPath()),{items:nuevoStock});
+    } catch(e){}
+  }
+
+  // ── CRUD items activos ────────────────────────────────────────────────────────
   function agregar() {
-    const texto = nuevo.trim();
-    if (!texto) return;
+    const texto = nuevo.trim(); if (!texto) return;
     const monto = montoNuevo.trim() ? parseFloat(montoNuevo.replace(",",".")) : null;
     const cantidad = cantidadNueva.trim() ? parseFloat(cantidadNueva.replace(",",".")) : null;
-    const item = {
-      id: `${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
-      texto, monto: (monto && !isNaN(monto)) ? monto : null,
-      cantidad: (cantidad && !isNaN(cantidad)) ? cantidad : null,
-      unidad: unidadNueva,
-      sector: sectorActivo, comprado:false, fechaComprado:null,
-    };
-    persistir([...items, item]);
+    persistirActivos([...items, {
+      id:`${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      texto, monto:(monto&&!isNaN(monto))?monto:null,
+      cantidad:(cantidad&&!isNaN(cantidad))?cantidad:null,
+      unidad:unidadNueva, sector:sectorActivo, comprado:false, fechaComprado:null,
+    }]);
     setNuevo(""); setMontoNuevo(""); setCantidadNueva("");
   }
 
-  function toggleComprado(id) {
-    const item = items.find(it=>it.id===id);
-    if (!item) return;
-    const marcandoComprado = !item.comprado;
-    persistir(items.map(it => it.id===id
-      ? { ...it, comprado: marcandoComprado, fechaComprado: marcandoComprado ? Date.now() : null }
-      : it));
-    // Al marcar como comprado, sumamos automáticamente al Stock
-    if (marcandoComprado) sumarAlStock(item);
+  async function toggleComprado(id) {
+    const item = items.find(it=>it.id===id); if (!item) return;
+    const marcando = !item.comprado;
+    const ts = marcando ? Date.now() : null;
+    persistirActivos(items.map(it=>it.id===id?{...it,comprado:marcando,fechaComprado:ts}:it));
+    if (marcando) {
+      await archivarCompra({...item, fechaComprado:ts}, ts);
+      if (item.cantidad!=null) sumarAlStock(item);
+    }
   }
 
-  function eliminar(id) {
-    persistir(items.filter(it => it.id !== id));
-  }
-
-  function limpiarComprados(sectorId) {
-    persistir(items.filter(it => !(it.comprado && it.sector===sectorId)));
-  }
-
+  function eliminar(id) { persistirActivos(items.filter(it=>it.id!==id)); }
+  function limpiarComprados(sectorId) { persistirActivos(items.filter(it=>!(it.comprado&&it.sector===sectorId))); }
   function editarMonto(id, valor) {
     const monto = valor.trim() ? parseFloat(valor.replace(",",".")) : null;
-    persistir(items.map(it => it.id===id
-      ? { ...it, monto:(monto&&!isNaN(monto))?monto:null }
-      : it));
+    persistirActivos(items.map(it=>it.id===id?{...it,monto:(monto&&!isNaN(monto))?monto:null}:it));
   }
 
-  const itemsSector = items.filter(it => it.sector === sectorActivo);
-  const pendientesSector = itemsSector.filter(it => !it.comprado);
-  const compradosSector  = itemsSector.filter(it => it.comprado);
+  // ── Cálculos UI ──────────────────────────────────────────────────────────────
+  const itemsSector = items.filter(it=>it.sector===sectorActivo);
+  const pendientesSector = itemsSector.filter(it=>!it.comprado);
+  const compradosSector  = itemsSector.filter(it=>it.comprado);
   const totalSector = compradosSector.reduce((a,it)=>a+(it.monto||0),0);
   const esSectorAlimento = VP_SECTORES_ALIMENTO.includes(sectorActivo);
-
-  // KPIs globales
-  const inicioSemana = vpSemanaActual();
-  const inicioMes    = vpMesActualTs();
-  const totalSemanal = items
-    .filter(it => it.comprado && it.fechaComprado && it.fechaComprado >= inicioSemana)
-    .reduce((a,it)=>a+(it.monto||0),0);
-  const totalMensual = items
-    .filter(it => it.comprado && it.fechaComprado && it.fechaComprado >= inicioMes)
-    .reduce((a,it)=>a+(it.monto||0),0);
-
-  // Ranking por sector — total comprado por sector (todo el tiempo)
+  const totalSemanal = semanaActual?.total || 0;
+  const totalMensual = mesActual?.total || 0;
+  const diasSemana = semanaActual ? Object.entries(semanaActual.dias||{}) : [];
   const rankingSectores = VP_SECTORES_COMPRA.map(s => {
-    const itsS = items.filter(it => it.sector===s.id && it.comprado);
-    const total = itsS.reduce((a,it)=>a+(it.monto||0),0);
-    const pend  = items.filter(it=>it.sector===s.id && !it.comprado).length;
-    return { ...s, total, pend, count: itsS.length };
+    const its = items.filter(it=>it.sector===s.id&&it.comprado);
+    const total = its.reduce((a,it)=>a+(it.monto||0),0);
+    return { ...s, total, pend:items.filter(it=>it.sector===s.id&&!it.comprado).length };
   }).sort((a,b)=>b.total-a.total);
-
   const fmt = n => n.toLocaleString("es-AR",{minimumFractionDigits:0,maximumFractionDigits:2});
 
+  const DIAS_ORDEN = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
+
+  // ── PANTALLA HISTORIAL SEMANAS ────────────────────────────────────────────────
+  if (vistaHistorial==="semanas") {
+    return (
+      <div style={{minHeight:"100vh",background:G.bg,fontFamily:"system-ui,sans-serif",
+        padding:"24px 16px 56px",maxWidth:430,margin:"0 auto"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:20}}>
+          <button onClick={()=>setVistaHistorial(null)} style={S.btn(false,false)}>← Compras</button>
+          <div style={{fontSize:13,fontWeight:600,color:G.text,letterSpacing:1}}>SEMANAS ANTERIORES</div>
+        </div>
+        {semanasHist.length===0 ? (
+          <div style={{textAlign:"center",color:G.textDim,fontSize:12,padding:32}}>
+            Sin historial de semanas anteriores todavía.
+          </div>
+        ) : semanasHist.map(sem => (
+          <div key={sem.sid} style={{border:`1px solid ${G.border}`,borderRadius:4,
+            padding:"12px",background:G.surf,marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+              <div style={{fontSize:11,color:G.textSec}}>Semana del {sem.sid}</div>
+              <div style={{fontSize:16,fontWeight:700,color:G.gold}}>${fmt(sem.total||0)}</div>
+            </div>
+            {DIAS_ORDEN.filter(d=>sem.dias?.[d]).map(dia => {
+              const dData = sem.dias[dia];
+              return (
+                <div key={dia} style={{padding:"6px 0",borderBottom:`1px solid ${G.border}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                    <span style={{fontSize:11,fontWeight:600,color:G.text}}>{dia}</span>
+                    <span style={{fontSize:11,color:G.gold,fontWeight:600}}>${fmt(dData.total||0)}</span>
+                  </div>
+                  {(dData.items||[]).map((it,i) => (
+                    <div key={i} style={{display:"flex",justifyContent:"space-between",
+                      fontSize:10,color:G.textDim,padding:"1px 0"}}>
+                      <span style={{textTransform:"capitalize"}}>{it.texto}
+                        {it.cantidad ? ` · ${it.cantidad}${VP_UNIDADES.find(u=>u.id===it.unidad)?.label}` : ""}
+                      </span>
+                      {it.monto ? <span style={{color:G.textSec}}>${fmt(it.monto)}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // ── PANTALLA HISTORIAL MESES ──────────────────────────────────────────────────
+  if (vistaHistorial==="meses") {
+    const MESES_LABEL = ["","Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+    return (
+      <div style={{minHeight:"100vh",background:G.bg,fontFamily:"system-ui,sans-serif",
+        padding:"24px 16px 56px",maxWidth:430,margin:"0 auto"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:20}}>
+          <button onClick={()=>setVistaHistorial(null)} style={S.btn(false,false)}>← Compras</button>
+          <div style={{fontSize:13,fontWeight:600,color:G.text,letterSpacing:1}}>MESES ANTERIORES</div>
+        </div>
+        {mesesHist.length===0 ? (
+          <div style={{textAlign:"center",color:G.textDim,fontSize:12,padding:32}}>
+            Sin historial mensual todavía.
+          </div>
+        ) : mesesHist.map(mes => {
+          const [anio,numMes] = mes.mid.split("-");
+          const semanas = Object.values(mes.semanas||{}).sort((a,b)=>a.sid>b.sid?1:-1);
+          return (
+            <div key={mes.mid} style={{border:`1px solid ${G.border}`,borderRadius:4,
+              padding:"12px",background:G.surf,marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <div style={{fontSize:13,fontWeight:600,color:G.text}}>
+                  {MESES_LABEL[parseInt(numMes)]} {anio}
+                </div>
+                <div style={{fontSize:18,fontWeight:700,color:G.gold}}>${fmt(mes.total||0)}</div>
+              </div>
+              {semanas.map(sem => (
+                <div key={sem.sid} style={{display:"flex",justifyContent:"space-between",
+                  padding:"5px 0",borderBottom:`1px solid ${G.border}`,fontSize:11}}>
+                  <span style={{color:G.textSec}}>Semana del {sem.sid}</span>
+                  <span style={{color:G.gold,fontWeight:600}}>${fmt(sem.total||0)}</span>
+                </div>
+              ))}
+              <div style={{fontSize:9,color:G.textDim,marginTop:6}}>
+                {semanas.reduce((a,s)=>a+(s.cantItems||0),0)} compras registradas
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // ── VISTA PRINCIPAL ───────────────────────────────────────────────────────────
   return (
     <div style={{minHeight:"100vh",background:G.bg,fontFamily:"system-ui,sans-serif",
       padding:"24px 16px 56px",maxWidth:430,margin:"0 auto"}}>
@@ -1291,14 +1445,11 @@ function VpListaCompras({ onBack, onAbrirStock }) {
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
         <button onClick={onBack} style={S.btn(false,false)}>← Pilares</button>
         <div style={{flex:1,textAlign:"right",display:"flex",gap:6,justifyContent:"flex-end"}}>
-          {onAbrirStock && (
-            <button onClick={onAbrirStock}
-              style={{fontSize:10,padding:"5px 10px",borderRadius:3,letterSpacing:.5,
-                background:G.surf2,color:G.textSec,border:`1px solid ${G.border}`,
-                cursor:"pointer",fontWeight:600}}>
-              📦 VER STOCK
-            </button>
-          )}
+          {onAbrirStock&&<button onClick={onAbrirStock}
+            style={{fontSize:10,padding:"5px 10px",borderRadius:3,letterSpacing:.5,
+              background:G.surf2,color:G.textSec,border:`1px solid ${G.border}`,cursor:"pointer",fontWeight:600}}>
+            📦 STOCK
+          </button>}
           <span style={{fontSize:10,padding:"5px 8px",borderRadius:3,letterSpacing:.5,
             background:saveStatus==="saving"?G.goldDim:saveStatus==="saved"?G.okBg:G.surf2,
             color:saveStatus==="saving"?G.gold:saveStatus==="saved"?"#7AB85A":G.textDim,
@@ -1316,18 +1467,54 @@ function VpListaCompras({ onBack, onAbrirStock }) {
       </div>
 
       {/* KPIs semanal / mensual */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
-        <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,textAlign:"center"}}>
-          <div style={{fontSize:9,color:G.textDim,letterSpacing:1,marginBottom:4}}>GASTO SEMANAL</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+        <div onClick={()=>{cargarHistorialSemanas();setVistaHistorial("semanas");}}
+          style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",
+            background:G.surf,textAlign:"center",cursor:"pointer"}}>
+          <div style={{fontSize:9,color:G.textDim,letterSpacing:1,marginBottom:4}}>ESTA SEMANA</div>
           <div style={{fontSize:18,fontWeight:700,color:G.gold}}>${fmt(totalSemanal)}</div>
+          <div style={{fontSize:9,color:G.textDim,marginTop:4}}>Ver historial →</div>
         </div>
-        <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,textAlign:"center"}}>
-          <div style={{fontSize:9,color:G.textDim,letterSpacing:1,marginBottom:4}}>GASTO MENSUAL</div>
+        <div onClick={()=>{cargarHistorialMeses();setVistaHistorial("meses");}}
+          style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",
+            background:G.surf,textAlign:"center",cursor:"pointer"}}>
+          <div style={{fontSize:9,color:G.textDim,letterSpacing:1,marginBottom:4}}>ESTE MES</div>
           <div style={{fontSize:18,fontWeight:700,color:G.gold}}>${fmt(totalMensual)}</div>
+          <div style={{fontSize:9,color:G.textDim,marginTop:4}}>Ver historial →</div>
         </div>
       </div>
 
-      {/* Ranking de sectores (estilo KPI) */}
+      {/* Desglose por día de la semana actual */}
+      {diasSemana.length>0 && (
+        <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",
+          background:G.surf,marginBottom:14}}>
+          <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>
+            ESTA SEMANA — DÍA A DÍA
+          </div>
+          {DIAS_ORDEN.filter(d=>semanaActual?.dias?.[d]).map(dia => {
+            const dData = semanaActual.dias[dia];
+            return (
+              <div key={dia} style={{padding:"5px 0",borderBottom:`1px solid ${G.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontSize:12,fontWeight:600,color:G.text}}>{dia}</span>
+                  <span style={{fontSize:12,color:G.gold,fontWeight:700}}>${fmt(dData.total||0)}</span>
+                </div>
+                {(dData.items||[]).map((it,i) => (
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",
+                    fontSize:10,color:G.textDim,paddingLeft:8}}>
+                    <span style={{textTransform:"capitalize"}}>{it.texto}
+                      {it.cantidad ? ` · ${it.cantidad}${VP_UNIDADES.find(u=>u.id===it.unidad)?.label}` : ""}
+                    </span>
+                    {it.monto ? <span>${fmt(it.monto)}</span> : null}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Ranking de sectores */}
       <div style={{border:`1px solid ${G.border}`,borderRadius:4,background:G.surf,
         padding:"12px",marginBottom:16}}>
         <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:10}}>RANKING POR SECTOR</div>
@@ -1340,9 +1527,7 @@ function VpListaCompras({ onBack, onAbrirStock }) {
               fontFamily:"'Courier New',monospace"}}>{["I","II","III","IV","V"][i]}</span>
             <span style={{fontSize:14}}>{s.emoji}</span>
             <span style={{flex:1,fontSize:11,color:G.textSec}}>{s.label}</span>
-            {s.pend>0 && (
-              <span style={{fontSize:9,color:G.textDim}}>{s.pend} pend.</span>
-            )}
+            {s.pend>0&&<span style={{fontSize:9,color:G.textDim}}>{s.pend} pend.</span>}
             <span style={{fontSize:12,fontWeight:700,color:s.color,minWidth:60,textAlign:"right"}}>
               ${fmt(s.total)}
             </span>
@@ -1350,7 +1535,7 @@ function VpListaCompras({ onBack, onAbrirStock }) {
         ))}
       </div>
 
-      {/* Tabs de sectores */}
+      {/* Tabs sectores */}
       <div style={{display:"flex",gap:4,marginBottom:12,overflowX:"auto"}}>
         {VP_SECTORES_COMPRA.map(s => {
           const active = sectorActivo===s.id;
@@ -1366,7 +1551,7 @@ function VpListaCompras({ onBack, onAbrirStock }) {
         })}
       </div>
 
-      {/* Input agregar — producto + cantidad/unidad + monto */}
+      {/* Input agregar */}
       <div style={{display:"flex",gap:6,marginBottom:6}}>
         <input value={nuevo} onChange={e=>setNuevo(e.target.value)}
           onKeyDown={e=>e.key==="Enter"&&agregar()}
@@ -1374,8 +1559,7 @@ function VpListaCompras({ onBack, onAbrirStock }) {
           style={{...S.inp(false),flex:1}}/>
         <button onClick={agregar}
           style={{padding:"8px 14px",borderRadius:3,background:G.gold,
-            border:"none",color:G.bg,fontSize:18,cursor:"pointer",fontWeight:700,
-            lineHeight:1}}>
+            border:"none",color:G.bg,fontSize:18,cursor:"pointer",fontWeight:700,lineHeight:1}}>
           +
         </button>
       </div>
@@ -1387,7 +1571,7 @@ function VpListaCompras({ onBack, onAbrirStock }) {
             style={{...S.inp(false),flex:1,textAlign:"center"}}/>
           <select value={unidadNueva} onChange={e=>setUnidadNueva(e.target.value)}
             style={{...S.inp(false),flex:1,cursor:"pointer",textAlign:"center"}}>
-            {VP_UNIDADES.map(u=> <option key={u.id} value={u.id}>{u.label}</option>)}
+            {VP_UNIDADES.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}
           </select>
           <input value={montoNuevo} onChange={e=>setMontoNuevo(e.target.value)}
             onKeyDown={e=>e.key==="Enter"&&agregar()}
@@ -1404,8 +1588,8 @@ function VpListaCompras({ onBack, onAbrirStock }) {
         </div>
       )}
 
-      {/* Total del sector activo */}
-      {compradosSector.length > 0 && (
+      {/* Total sector activo */}
+      {compradosSector.length>0 && (
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
           padding:"8px 12px",marginBottom:10,border:`1px solid ${G.border}`,borderRadius:4,
           background:G.surf2}}>
@@ -1417,54 +1601,47 @@ function VpListaCompras({ onBack, onAbrirStock }) {
       {loading ? (
         <div style={{textAlign:"center",color:G.textDim,fontSize:11,padding:20,letterSpacing:1,
           fontFamily:"'Courier New',monospace"}}>CARGANDO...</div>
-      ) : itemsSector.length === 0 ? (
+      ) : itemsSector.length===0 ? (
         <div style={{textAlign:"center",color:G.textDim,fontSize:12,padding:30}}>
           Sin productos en este sector. Agregá el primero.
         </div>
       ) : (
         <>
-          {/* Pendientes primero */}
+          {/* Pendientes */}
           {pendientesSector.map(it => (
             <div key={it.id}
               style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
                 border:`1px solid ${G.border}`,borderRadius:4,marginBottom:5,background:G.surf}}>
               <div onClick={()=>toggleComprado(it.id)}
                 style={{width:18,height:18,borderRadius:2,flexShrink:0,cursor:"pointer",
-                  border:`1.5px solid ${G.textDim}`,background:"transparent"}}/>
+                  border:`1.5px solid ${G.textDim}`,background:"transparent",
+                  touchAction:"manipulation"}}/>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13,color:G.text}}>{it.texto}</div>
-                {it.cantidad!=null && (
-                  <div style={{fontSize:10,color:G.textDim,marginTop:1}}>
-                    {it.cantidad} {VP_UNIDADES.find(u=>u.id===it.unidad)?.label}
-                  </div>
-                )}
+                {it.cantidad!=null&&<div style={{fontSize:10,color:G.textDim,marginTop:1}}>
+                  {it.cantidad} {VP_UNIDADES.find(u=>u.id===it.unidad)?.label}
+                </div>}
               </div>
-              <input
-                defaultValue={it.monto ?? ""}
-                onBlur={e=>editarMonto(it.id, e.target.value)}
-                onKeyDown={e=>{ if(e.key==="Enter"){ editarMonto(it.id, e.target.value); e.target.blur(); }}}
+              <input defaultValue={it.monto??""} onBlur={e=>editarMonto(it.id,e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter"){editarMonto(it.id,e.target.value);e.target.blur();}}}
                 placeholder="$" type="text" inputMode="decimal"
                 style={{width:64,fontSize:12,padding:"4px 6px",textAlign:"right",
                   border:`1px solid ${G.border}`,borderRadius:3,background:G.surf2,
                   color:G.gold,outline:"none",fontFamily:"inherit"}}/>
               <button onClick={()=>eliminar(it.id)}
-                style={{background:"none",border:"none",color:G.textDim,fontSize:16,
-                  cursor:"pointer",padding:"0 4px",lineHeight:1}}>
-                ×
-              </button>
+                style={{background:"none",border:"none",color:G.textDim,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
             </div>
           ))}
 
           {/* Comprados — tachados */}
-          {compradosSector.length > 0 && (
+          {compradosSector.length>0&&(
             <>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-                margin:"16px 0 8px"}}>
-                <div style={{fontSize:9,color:G.textDim,letterSpacing:2}}>COMPRADOS</div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"16px 0 8px"}}>
+                <div style={{fontSize:9,color:G.textDim,letterSpacing:2}}>COMPRADOS HOY</div>
                 <button onClick={()=>limpiarComprados(sectorActivo)}
                   style={{fontSize:10,color:G.textDim,background:"none",border:"none",
                     cursor:"pointer",textDecoration:"underline",letterSpacing:.5}}>
-                  Limpiar comprados
+                  Limpiar lista
                 </button>
               </div>
               {compradosSector.map(it => (
@@ -1476,23 +1653,19 @@ function VpListaCompras({ onBack, onAbrirStock }) {
                     style={{width:18,height:18,borderRadius:2,flexShrink:0,cursor:"pointer",
                       border:`1.5px solid ${G.gold}`,background:G.gold,
                       display:"flex",alignItems:"center",justifyContent:"center",
-                      fontSize:11,color:G.bg,fontWeight:700}}>✓</div>
+                      fontSize:11,color:G.bg,fontWeight:700,touchAction:"manipulation"}}>✓</div>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:13,color:G.textSec,textDecoration:"line-through"}}>{it.texto}</div>
-                    {it.cantidad!=null && (
-                      <div style={{fontSize:10,color:G.textDim,marginTop:1}}>
-                        {it.cantidad} {VP_UNIDADES.find(u=>u.id===it.unidad)?.label}
-                      </div>
-                    )}
+                    {it.cantidad!=null&&<div style={{fontSize:10,color:G.textDim,marginTop:1}}>
+                      {it.cantidad} {VP_UNIDADES.find(u=>u.id===it.unidad)?.label}
+                    </div>}
+                    {it.fechaComprado&&<div style={{fontSize:9,color:G.textDim}}>
+                      {vpDiaNombre(it.fechaComprado)} {vpFechaCorta(it.fechaComprado)}
+                    </div>}
                   </div>
-                  {it.monto!=null && (
-                    <span style={{fontSize:12,color:G.gold,fontWeight:600}}>${fmt(it.monto)}</span>
-                  )}
+                  {it.monto!=null&&<span style={{fontSize:12,color:G.gold,fontWeight:600}}>${fmt(it.monto)}</span>}
                   <button onClick={()=>eliminar(it.id)}
-                    style={{background:"none",border:"none",color:G.textDim,fontSize:16,
-                      cursor:"pointer",padding:"0 4px",lineHeight:1}}>
-                    ×
-                  </button>
+                    style={{background:"none",border:"none",color:G.textDim,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
                 </div>
               ))}
             </>
