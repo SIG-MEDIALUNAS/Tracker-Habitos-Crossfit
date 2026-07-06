@@ -507,9 +507,6 @@ const VP_PILARES = [
   ], notaLabel:"La acción más importante que hice hoy" },
 ];
 
-// ── Desayuno fijo ─────────────────────────────────────────────────────────────
-const VP_DESAYUNO = { avena:70, leche:250, banana:120, huevos:3, kcal:520, prot:32 };
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // BASE DE EJERCICIOS — CrossFit (WOD) + Fuerza (rutina fija)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3658,15 +3655,14 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
   const pct = Math.round((completados / pilar.habitos.length) * 100);
   const c = pilar.color;
 
-  // Total real del día — desayuno fijo + cada tupper que se marcó como "comido" hoy.
-  // Ya no depende de plantillas manuales: suma exactamente lo que el sistema sabe
-  // que comiste, según los lotes reales preparados en Cocina.
+  // Total real del día — suma exactamente lo que el sistema sabe que comiste,
+  // según los lotes reales preparados en Cocina (cada tupper marcado como "comido" hoy).
   const totalDia = pilar.esNutricion ? tuppersConsumidos.reduce((acc, t) => ({
     kcal:   acc.kcal   + (t.nutricion?.kcal   || 0),
     carbs:  acc.carbs  + (t.nutricion?.carbs  || 0),
     prot:   acc.prot   + (t.nutricion?.prot   || 0),
     grasas: acc.grasas + (t.nutricion?.grasas || 0),
-  }), { kcal:VP_DESAYUNO.kcal, carbs:0, prot:VP_DESAYUNO.prot, grasas:0 }) : null;
+  }), { kcal:0, carbs:0, prot:0, grasas:0 }) : null;
 
   return (
     <div>
@@ -3843,23 +3839,7 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
           {/* Tuppers reales preparados desde Cocina — única fuente de info de comidas */}
           <VpTuppersReales consumidosHoy={tuppersConsumidos} onConsumir={registrarConsumo} />
 
-          {/* Desayuno fijo */}
-          <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
-            <div style={{fontSize:13,fontWeight:600,color:G.text,marginBottom:8,fontFamily:"system-ui,sans-serif"}}>🥣 Desayuno (fijo)</div>
-            {[["Avena cocida",`${VP_DESAYUNO.avena}g`],["Leche entera",`${VP_DESAYUNO.leche}ml`],
-              ["Banana",`${VP_DESAYUNO.banana}g`],["Huevos enteros","3 unidades"]].map(([n,v])=>(
-              <div key={n} style={{display:"flex",justifyContent:"space-between",fontSize:12,
-                padding:"5px 0",borderBottom:`1px solid ${G.border}`,fontFamily:"system-ui,sans-serif"}}>
-                <span style={{color:G.textSec}}>{n}</span>
-                <span style={{fontWeight:500,color:G.text}}>{v}</span>
-              </div>
-            ))}
-            <div style={{fontSize:11,color:G.textDim,marginTop:5,fontFamily:"system-ui,sans-serif"}}>
-              {VP_DESAYUNO.prot}g prot · {VP_DESAYUNO.kcal} kcal
-            </div>
-          </div>
-
-          {/* Totales del día — suma real: desayuno + tuppers comidos hoy */}
+          {/* Totales del día — suma real: tuppers comidos hoy */}
           <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf2,marginBottom:8}}>
             <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>TOTAL DEL DÍA</div>
             {[
