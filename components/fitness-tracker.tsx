@@ -508,6 +508,84 @@ const VP_PILARES = [
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// REFERENCIA CORPORAL — Cintura · % Grasa · Peso orientativo
+// Calculado con fórmula US Navy (cintura - cuello, altura) para altura 1.80m,
+// asumiendo cuello ~39cm (contextura atlética/hombros anchos). Es una aproximación
+// (±3-4%) para ver TENDENCIA en el tiempo, no reemplaza plicómetro/DEXA/bioimpedancia.
+// ═══════════════════════════════════════════════════════════════════════════════
+const VP_REF_CORPORAL = [
+  { cinturaMax:78,  bf:"6-8%",   cat:"Atlético extremo", peso:"75-82 kg" },
+  { cinturaMax:83,  bf:"9-13%",  cat:"Atlético",          peso:"80-87 kg" },
+  { cinturaMax:88,  bf:"14-17%", cat:"Fitness",           peso:"85-92 kg" },
+  { cinturaMax:93,  bf:"18-20%", cat:"Aceptable (bajo)",  peso:"90-97 kg" },
+  { cinturaMax:98,  bf:"21-24%", cat:"Aceptable",         peso:"95-102 kg" },
+  { cinturaMax:103, bf:"25-28%", cat:"Sobrepeso leve",    peso:"100-107 kg" },
+  { cinturaMax:108, bf:"29-31%", cat:"Sobrepeso",         peso:"105-112 kg" },
+  { cinturaMax:113, bf:"32-34%", cat:"Obesidad leve",     peso:"110-117 kg" },
+  { cinturaMax:Infinity, bf:"35%+", cat:"Obesidad",       peso:"115+ kg" },
+];
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TABLA DE REFERENCIA — resalta la fila donde cae la cintura registrada hoy
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpTablaReferenciaCorporal({ cinturaActual }) {
+  const [abierto, setAbierto] = useState(false);
+  const val = parseFloat(cinturaActual);
+  const filaActiva = !isNaN(val) ? VP_REF_CORPORAL.findIndex(r => val <= r.cinturaMax) : -1;
+
+  return (
+    <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
+      <div onClick={()=>setAbierto(a=>!a)}
+        style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",
+          touchAction:"manipulation",WebkitTapHighlightColor:"transparent"}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,fontFamily:"system-ui,sans-serif"}}>
+          📐 REFERENCIA: CINTURA · PESO · % GRASA
+        </div>
+        <div style={{fontSize:11,color:G.textDim}}>{abierto ? "▲" : "▼"}</div>
+      </div>
+      {abierto && (
+        <>
+          <div style={{marginTop:10,overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"system-ui,sans-serif"}}>
+              <thead>
+                <tr style={{borderBottom:`1px solid ${G.border}`}}>
+                  <th style={{textAlign:"left",padding:"4px 6px",color:G.textDim,fontWeight:600}}>Cintura</th>
+                  <th style={{textAlign:"left",padding:"4px 6px",color:G.textDim,fontWeight:600}}>% Grasa</th>
+                  <th style={{textAlign:"left",padding:"4px 6px",color:G.textDim,fontWeight:600}}>Categoría</th>
+                  <th style={{textAlign:"left",padding:"4px 6px",color:G.textDim,fontWeight:600}}>Peso*</th>
+                </tr>
+              </thead>
+              <tbody>
+                {VP_REF_CORPORAL.map((r, i) => (
+                  <tr key={i} style={{background: i===filaActiva ? `${G.gold}22` : "transparent",
+                    borderBottom:`1px solid ${G.border}55`}}>
+                    <td style={{padding:"5px 6px",color:i===filaActiva?G.gold:G.text,fontWeight:i===filaActiva?700:400,whiteSpace:"nowrap"}}>
+                      {r.cinturaMax===Infinity ? `> ${VP_REF_CORPORAL[i-1].cinturaMax}cm` : `≤ ${r.cinturaMax}cm`}
+                    </td>
+                    <td style={{padding:"5px 6px",color:i===filaActiva?G.gold:G.textSec,whiteSpace:"nowrap"}}>{r.bf}</td>
+                    <td style={{padding:"5px 6px",color:i===filaActiva?G.gold:G.textSec,whiteSpace:"nowrap"}}>{r.cat}</td>
+                    <td style={{padding:"5px 6px",color:i===filaActiva?G.gold:G.textSec,whiteSpace:"nowrap"}}>{r.peso}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {filaActiva>=0 && (
+            <div style={{fontSize:11,color:G.gold,fontWeight:600,marginTop:8,fontFamily:"system-ui,sans-serif"}}>
+              Hoy ({val}cm) → {VP_REF_CORPORAL[filaActiva].cat} · {VP_REF_CORPORAL[filaActiva].bf} aprox.
+            </div>
+          )}
+          <div style={{fontSize:9,color:G.textDim,marginTop:8,lineHeight:1.5,fontFamily:"system-ui,sans-serif"}}>
+            *Calculado con fórmula US Navy (cintura–cuello–altura) para 1.80m, cuello ~39cm asumido.
+            Peso orientativo para contextura atlética. Aproximación (±3-4%) para ver tendencia — no reemplaza plicómetro/DEXA/bioimpedancia.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // BASE DE EJERCICIOS — CrossFit (WOD) + Fuerza (rutina fija)
 // ═══════════════════════════════════════════════════════════════════════════════
 // tipo: "tiempo" (for time), "amrap" (rondas+reps), "fuerza" (peso x reps)
@@ -3818,6 +3896,9 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
               Altura del ombligo, relajado, sin meter panza · ayunas, mismo horario
             </div>
           </div>
+
+          {/* Referencia cintura · peso · % grasa */}
+          <VpTablaReferenciaCorporal cinturaActual={cintura} />
         </>
       )}
 
