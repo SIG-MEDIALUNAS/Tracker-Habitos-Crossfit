@@ -3599,6 +3599,7 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
   // fitness extras
   const [tipoDia,  setTipoDia]  = useState(datos?.tipoDia || "entreno");
   const [peso,     setPeso]     = useState(datos?.peso || "");
+  const [cintura,  setCintura]  = useState(datos?.cintura || "");
   const [wod,      setWod]      = useState(datos?.wod || "");
   // nutrición extras — tuppers reales comidos HOY (no plantilla, vienen de Cocina)
   const [tuppersConsumidos, setTuppersConsumidos] = useState(datos?.tuppersConsumidos || []);
@@ -3622,6 +3623,7 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
       setNota(datos?.nota || "");
       setTipoDia(datos?.tipoDia || "entreno");
       setPeso(datos?.peso || "");
+      setCintura(datos?.cintura || "");
       setWod(datos?.wod || "");
       setTuppersConsumidos(datos?.tuppersConsumidos || []);
       setResultadoUSD(datos?.resultadoUSD || "");
@@ -3634,7 +3636,7 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
   useEffect(() => {
     if (!listo) return; // no guardar hasta que el estado esté sincronizado con datos reales
     const payload = { habitos, nota };
-    if (pilar.esFitness) Object.assign(payload, { tipoDia, peso, wod });
+    if (pilar.esFitness) Object.assign(payload, { tipoDia, peso, cintura, wod });
     if (pilar.esNutricion) Object.assign(payload, { tuppersConsumidos });
     if (pilar.esTrading) Object.assign(payload, { resultadoUSD, equityCuenta, cantOperaciones });
     // Evitamos guardar si el payload es idéntico a lo que ya está sincronizado —
@@ -3643,7 +3645,7 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
     if (payloadStr === datosRef.current) return;
     datosRef.current = payloadStr;
     onChange(payload);
-  }, [listo, habitos, nota, tipoDia, peso, wod, tuppersConsumidos, resultadoUSD, equityCuenta, cantOperaciones]);
+  }, [listo, habitos, nota, tipoDia, peso, cintura, wod, tuppersConsumidos, resultadoUSD, equityCuenta, cantOperaciones]);
 
   function toggleH(id) { setHabitos(p => ({ ...p, [id]: !p[id] })); }
 
@@ -3803,6 +3805,17 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
               style={{...S.inp(false),fontSize:18,textAlign:"center",fontWeight:600,color:G.gold}}/>
             <div style={{fontSize:10,color:G.textDim,marginTop:6,fontFamily:"system-ui,sans-serif"}}>
               Registrá en ayunas, mismo horario siempre
+            </div>
+          </div>
+
+          {/* Cintura */}
+          <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
+            <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6}}>CINTURA HOY (CM)</div>
+            <input type="number" step="0.1" value={cintura} onChange={e=>setCintura(e.target.value)}
+              placeholder="90.0"
+              style={{...S.inp(false),fontSize:18,textAlign:"center",fontWeight:600,color:G.gold}}/>
+            <div style={{fontSize:10,color:G.textDim,marginTop:6,fontFamily:"system-ui,sans-serif"}}>
+              Altura del ombligo, relajado, sin meter panza · ayunas, mismo horario
             </div>
           </div>
         </>
@@ -4112,7 +4125,7 @@ function VpResumenSemanal({ mesId, wIdx }) {
       {/* Peso semanal fitness */}
       {Object.keys(diasData).length > 0 && (() => {
         const pesos = DIAS.map((_, di) =>
-          diasData[di]?.nutricion?.peso ? parseFloat(diasData[di].nutricion.peso) : null
+          diasData[di]?.fitness?.peso ? parseFloat(diasData[di].fitness.peso) : null
         ).filter(Boolean);
         if (pesos.length === 0) return null;
         const promedio = (pesos.reduce((a,b)=>a+b,0)/pesos.length).toFixed(1);
@@ -4124,7 +4137,7 @@ function VpResumenSemanal({ mesId, wIdx }) {
             </div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
               {DIAS.map((dia, di) => {
-                const p = diasData[di]?.nutricion?.peso;
+                const p = diasData[di]?.fitness?.peso;
                 return p ? (
                   <div key={di} style={{fontSize:11,padding:"4px 8px",background:G.surf2,
                     border:"1px solid #C9724C44",borderRadius:3,color:"#C9724C",fontFamily:"system-ui,sans-serif"}}>
@@ -4135,6 +4148,37 @@ function VpResumenSemanal({ mesId, wIdx }) {
             </div>
             <div style={{fontSize:12,color:"#C9724C",fontWeight:600,marginTop:8,fontFamily:"system-ui,sans-serif"}}>
               Promedio: {promedio} kg
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Cintura semanal fitness */}
+      {Object.keys(diasData).length > 0 && (() => {
+        const cinturas = DIAS.map((_, di) =>
+          diasData[di]?.fitness?.cintura ? parseFloat(diasData[di].fitness.cintura) : null
+        ).filter(Boolean);
+        if (cinturas.length === 0) return null;
+        const promedio = (cinturas.reduce((a,b)=>a+b,0)/cinturas.length).toFixed(1);
+        return (
+          <div style={{border:"1px solid #6FA3D444",borderRadius:4,padding:"12px",
+            background:"#04121a",marginBottom:8}}>
+            <div style={{fontSize:12,fontWeight:600,color:"#6FA3D4",marginBottom:8,letterSpacing:1,fontFamily:"system-ui,sans-serif"}}>
+              📏 CINTURA — SEMANA
+            </div>
+            <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+              {DIAS.map((dia, di) => {
+                const cm = diasData[di]?.fitness?.cintura;
+                return cm ? (
+                  <div key={di} style={{fontSize:11,padding:"4px 8px",background:G.surf2,
+                    border:"1px solid #6FA3D444",borderRadius:3,color:"#6FA3D4",fontFamily:"system-ui,sans-serif"}}>
+                    {dia.slice(0,3)}: <strong>{cm}cm</strong>
+                  </div>
+                ) : null;
+              })}
+            </div>
+            <div style={{fontSize:12,color:"#6FA3D4",fontWeight:600,marginTop:8,fontFamily:"system-ui,sans-serif"}}>
+              Promedio: {promedio} cm
             </div>
           </div>
         );
@@ -4233,6 +4277,7 @@ function VpResumenMensual({ mesId }) {
       const pilarStats = {};
       VP_PILARES.forEach(p => { pilarStats[p.id] = { logrado:0, total:0, dias:0 }; });
       const pesos = [];
+      const cinturas = [];
       const equity = []; // { dia: number, valor: number }
       const resultados = [];
 
@@ -4245,14 +4290,15 @@ function VpResumenMensual({ mesId }) {
           pilarStats[p.id].total   += p.habitos.length;
           pilarStats[p.id].dias++;
         });
-        if (pilares.nutricion?.peso) pesos.push(parseFloat(pilares.nutricion.peso));
+        if (pilares.fitness?.peso) pesos.push(parseFloat(pilares.fitness.peso));
+        if (pilares.fitness?.cintura) cinturas.push(parseFloat(pilares.fitness.cintura));
         if (pilares.trading?.equityCuenta) equity.push({ idx, valor: parseFloat(pilares.trading.equityCuenta) });
         if (pilares.trading?.resultadoUSD !== undefined && pilares.trading?.resultadoUSD !== "") {
           resultados.push(parseFloat(pilares.trading.resultadoUSD));
         }
       });
 
-      setData({ pilarStats, pesos, equity, resultados });
+      setData({ pilarStats, pesos, cinturas, equity, resultados });
       setLoading(false);
     });
   }, [mesId]);
@@ -4262,6 +4308,10 @@ function VpResumenMensual({ mesId }) {
   const pesoMin  = data.pesos.length ? Math.min(...data.pesos).toFixed(1) : null;
   const pesoMax  = data.pesos.length ? Math.max(...data.pesos).toFixed(1) : null;
   const pesoProm = data.pesos.length ? (data.pesos.reduce((a,b)=>a+b,0)/data.pesos.length).toFixed(1) : null;
+
+  const cinturaMin  = data.cinturas.length ? Math.min(...data.cinturas).toFixed(1) : null;
+  const cinturaMax  = data.cinturas.length ? Math.max(...data.cinturas).toFixed(1) : null;
+  const cinturaProm = data.cinturas.length ? (data.cinturas.reduce((a,b)=>a+b,0)/data.cinturas.length).toFixed(1) : null;
 
   const equitySorted = [...data.equity].sort((a,b)=>a.idx-b.idx);
   const equityInicial = equitySorted.length ? equitySorted[0].valor : null;
@@ -4316,6 +4366,27 @@ function VpResumenMensual({ mesId }) {
           </div>
           <div style={{fontSize:10,color:"#C9724C",marginTop:8,opacity:.75,fontFamily:"system-ui,sans-serif"}}>
             {data.pesos.length} registros en el mes
+          </div>
+        </div>
+      )}
+      {/* Evolución de cintura */}
+      {cinturaProm && (
+        <div style={{border:"1px solid #6FA3D444",borderRadius:4,padding:"12px",
+          background:"#04121a",marginTop:8}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#6FA3D4",marginBottom:8,letterSpacing:1,fontFamily:"system-ui,sans-serif"}}>
+            📏 CINTURA — RESUMEN MENSUAL
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            {[["Mínimo",`${cinturaMin}cm`],["Promedio",`${cinturaProm}cm`],["Máximo",`${cinturaMax}cm`]].map(([lbl,val])=>(
+              <div key={lbl} style={{textAlign:"center",padding:"8px",background:G.surf2,
+                border:"1px solid #6FA3D444",borderRadius:3}}>
+                <div style={{fontSize:9,color:G.textDim,marginBottom:4,fontFamily:"system-ui,sans-serif"}}>{lbl}</div>
+                <div style={{fontSize:15,fontWeight:700,color:"#6FA3D4"}}>{val}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:10,color:"#6FA3D4",marginTop:8,opacity:.75,fontFamily:"system-ui,sans-serif"}}>
+            {data.cinturas.length} registros en el mes
           </div>
         </div>
       )}
