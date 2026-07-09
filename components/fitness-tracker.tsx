@@ -514,24 +514,36 @@ const VP_PILARES = [
 // (±3-4%) para ver TENDENCIA en el tiempo, no reemplaza plicómetro/DEXA/bioimpedancia.
 // ═══════════════════════════════════════════════════════════════════════════════
 const VP_REF_CORPORAL = [
-  { cinturaMax:78,  bf:"6-8%",   cat:"Atlético extremo", peso:"75-82 kg" },
-  { cinturaMax:83,  bf:"9-13%",  cat:"Atlético",          peso:"80-87 kg" },
-  { cinturaMax:88,  bf:"14-17%", cat:"Fitness",           peso:"85-92 kg" },
-  { cinturaMax:93,  bf:"18-20%", cat:"Aceptable (bajo)",  peso:"90-97 kg" },
-  { cinturaMax:98,  bf:"21-24%", cat:"Aceptable",         peso:"95-102 kg" },
-  { cinturaMax:103, bf:"25-28%", cat:"Sobrepeso leve",    peso:"100-107 kg" },
-  { cinturaMax:108, bf:"29-31%", cat:"Sobrepeso",         peso:"105-112 kg" },
-  { cinturaMax:113, bf:"32-34%", cat:"Obesidad leve",     peso:"110-117 kg" },
-  { cinturaMax:Infinity, bf:"35%+", cat:"Obesidad",       peso:"115+ kg" },
+  { cinturaMax:78,  bf:"6-8%",   cat:"Atlético extremo" },
+  { cinturaMax:83,  bf:"9-13%",  cat:"Atlético" },
+  { cinturaMax:88,  bf:"14-17%", cat:"Fitness" },
+  { cinturaMax:93,  bf:"18-20%", cat:"Aceptable (bajo)" },
+  { cinturaMax:98,  bf:"21-24%", cat:"Aceptable" },
+  { cinturaMax:103, bf:"25-28%", cat:"Sobrepeso leve" },
+  { cinturaMax:108, bf:"29-31%", cat:"Sobrepeso" },
+  { cinturaMax:113, bf:"32-34%", cat:"Obesidad leve" },
+  { cinturaMax:Infinity, bf:"35%+", cat:"Obesidad" },
 ];
+
+// Fórmula US Navy: %grasa a partir de cintura, cuello y altura (cm)
+function vpCalcularBF(cinturaCm, alturaCm=180, cuelloCm=39) {
+  const dif = cinturaCm - cuelloCm;
+  if (dif <= 0) return null;
+  const denom = 1.0324 - 0.19077*Math.log10(dif) + 0.15456*Math.log10(alturaCm);
+  return 495/denom - 450;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TABLA DE REFERENCIA — resalta la fila donde cae la cintura registrada hoy
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpTablaReferenciaCorporal({ cinturaActual }) {
+function VpTablaReferenciaCorporal({ cinturaActual, pesoActual }) {
   const [abierto, setAbierto] = useState(false);
-  const val = parseFloat(cinturaActual);
-  const filaActiva = !isNaN(val) ? VP_REF_CORPORAL.findIndex(r => val <= r.cinturaMax) : -1;
+  const cint = parseFloat(cinturaActual);
+  const peso = parseFloat(pesoActual);
+  const filaActiva = !isNaN(cint) ? VP_REF_CORPORAL.findIndex(r => cint <= r.cinturaMax) : -1;
+  const bfExacto = !isNaN(cint) ? vpCalcularBF(cint) : null;
+  const masaGrasa = (bfExacto!=null && !isNaN(peso)) ? peso * bfExacto/100 : null;
+  const masaMagra = (bfExacto!=null && !isNaN(peso)) ? peso - masaGrasa : null;
 
   return (
     <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
@@ -539,7 +551,7 @@ function VpTablaReferenciaCorporal({ cinturaActual }) {
         style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",
           touchAction:"manipulation",WebkitTapHighlightColor:"transparent"}}>
         <div style={{fontSize:9,color:G.gold,letterSpacing:2,fontFamily:"system-ui,sans-serif"}}>
-          📐 REFERENCIA: CINTURA · PESO · % GRASA
+          📐 REFERENCIA: CINTURA · % GRASA · COMPOSICIÓN
         </div>
         <div style={{fontSize:11,color:G.textDim}}>{abierto ? "▲" : "▼"}</div>
       </div>
@@ -552,7 +564,6 @@ function VpTablaReferenciaCorporal({ cinturaActual }) {
                   <th style={{textAlign:"left",padding:"4px 6px",color:G.textDim,fontWeight:600}}>Cintura</th>
                   <th style={{textAlign:"left",padding:"4px 6px",color:G.textDim,fontWeight:600}}>% Grasa</th>
                   <th style={{textAlign:"left",padding:"4px 6px",color:G.textDim,fontWeight:600}}>Categoría</th>
-                  <th style={{textAlign:"left",padding:"4px 6px",color:G.textDim,fontWeight:600}}>Peso*</th>
                 </tr>
               </thead>
               <tbody>
@@ -564,20 +575,40 @@ function VpTablaReferenciaCorporal({ cinturaActual }) {
                     </td>
                     <td style={{padding:"5px 6px",color:i===filaActiva?G.gold:G.textSec,whiteSpace:"nowrap"}}>{r.bf}</td>
                     <td style={{padding:"5px 6px",color:i===filaActiva?G.gold:G.textSec,whiteSpace:"nowrap"}}>{r.cat}</td>
-                    <td style={{padding:"5px 6px",color:i===filaActiva?G.gold:G.textSec,whiteSpace:"nowrap"}}>{r.peso}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {filaActiva>=0 && (
-            <div style={{fontSize:11,color:G.gold,fontWeight:600,marginTop:8,fontFamily:"system-ui,sans-serif"}}>
-              Hoy ({val}cm) → {VP_REF_CORPORAL[filaActiva].cat} · {VP_REF_CORPORAL[filaActiva].bf} aprox.
+
+          {bfExacto!=null && (
+            <div style={{marginTop:10,padding:"10px",background:G.surf2,border:`1px solid ${G.gold}44`,borderRadius:4}}>
+              <div style={{fontSize:11,color:G.gold,fontWeight:600,fontFamily:"system-ui,sans-serif"}}>
+                Hoy ({cint}cm) → {VP_REF_CORPORAL[filaActiva]?.cat} · {bfExacto.toFixed(1)}% grasa estimado
+              </div>
+              {masaGrasa!=null && (
+                <div style={{display:"flex",gap:16,marginTop:8}}>
+                  <div>
+                    <div style={{fontSize:9,color:G.textDim,fontFamily:"system-ui,sans-serif"}}>MASA GRASA</div>
+                    <div style={{fontSize:15,fontWeight:700,color:G.text}}>{masaGrasa.toFixed(1)} kg</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:9,color:G.textDim,fontFamily:"system-ui,sans-serif"}}>MASA MAGRA</div>
+                    <div style={{fontSize:15,fontWeight:700,color:G.text}}>{masaMagra.toFixed(1)} kg</div>
+                  </div>
+                </div>
+              )}
+              {masaGrasa==null && (
+                <div style={{fontSize:10,color:G.textDim,marginTop:6,fontFamily:"system-ui,sans-serif"}}>
+                  Cargá tu peso corporal arriba para ver el desglose en kg de masa grasa y masa magra
+                </div>
+              )}
             </div>
           )}
+
           <div style={{fontSize:9,color:G.textDim,marginTop:8,lineHeight:1.5,fontFamily:"system-ui,sans-serif"}}>
-            *Calculado con fórmula US Navy (cintura–cuello–altura) para 1.80m, cuello ~39cm asumido.
-            Peso orientativo para contextura atlética. Aproximación (±3-4%) para ver tendencia — no reemplaza plicómetro/DEXA/bioimpedancia.
+            Calculado con fórmula US Navy (cintura–cuello–altura) para 1.80m, cuello ~39cm asumido.
+            Aproximación (±3-4%) para ver tendencia — no reemplaza plicómetro/DEXA/bioimpedancia.
           </div>
         </>
       )}
@@ -3898,7 +3929,7 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
           </div>
 
           {/* Referencia cintura · peso · % grasa */}
-          <VpTablaReferenciaCorporal cinturaActual={cintura} />
+          <VpTablaReferenciaCorporal cinturaActual={cintura} pesoActual={peso} />
         </>
       )}
 
