@@ -1255,6 +1255,12 @@ function vpFechaCorta(ts) {
   const d = new Date(ts);
   return `${d.getDate()}/${d.getMonth()+1}`;
 }
+// ¿El timestamp corresponde al día calendario de hoy?
+function vpEsHoy(ts) {
+  if (!ts) return false;
+  const d = new Date(ts), hoy = new Date();
+  return d.getFullYear()===hoy.getFullYear() && d.getMonth()===hoy.getMonth() && d.getDate()===hoy.getDate();
+}
 function vpSemanaActual() {
   const d = new Date();
   const ini = new Date(d); ini.setDate(d.getDate() - d.getDay()); ini.setHours(0,0,0,0);
@@ -1300,7 +1306,15 @@ function VpListaCompras({ onBack, onAbrirStock }) {
       getDoc(doc(db, vpComprasSemanaPath(sidActual))),
       getDoc(doc(db, vpComprasMesPath(midActual))),
     ]).then(([snapA, snapS, snapM]) => {
-      setItems(snapA.exists() ? snapA.data().items || [] : []);
+      const itemsCargados = snapA.exists() ? snapA.data().items || [] : [];
+      // Lo comprado en días anteriores ya quedó anclado en su día dentro del historial
+      // semanal/mensual (archivarCompra). Acá solo dejamos en la lista activa lo pendiente
+      // (sin tildar) y lo comprado hoy — así abajo no se van acumulando compras viejas.
+      const itemsLimpios = itemsCargados.filter(it => !it.comprado || vpEsHoy(it.fechaComprado));
+      setItems(itemsLimpios);
+      if (itemsLimpios.length !== itemsCargados.length && firebaseOk) {
+        setDoc(doc(db, vpComprasActivasPath()), { items: itemsLimpios }).catch(()=>{});
+      }
       setSemanaActual(snapS.exists() ? snapS.data() : { sid:sidActual, dias:{}, total:0 });
       setMesActual(snapM.exists() ? snapM.data() : { mid:midActual, semanas:{}, total:0 });
       setLoading(false);
@@ -1438,7 +1452,7 @@ function VpListaCompras({ onBack, onAbrirStock }) {
   // ── Cálculos UI ──────────────────────────────────────────────────────────────
   const itemsSector = items.filter(it=>it.sector===sectorActivo);
   const pendientesSector = itemsSector.filter(it=>!it.comprado);
-  const compradosSector  = itemsSector.filter(it=>it.comprado);
+  const compradosSector  = itemsSector.filter(it=>it.comprado && vpEsHoy(it.fechaComprado));
   const totalSector = compradosSector.reduce((a,it)=>a+(it.monto||0),0);
   const esSectorAlimento = VP_SECTORES_ALIMENTO.includes(sectorActivo);
   const totalSemanal = semanaActual?.total || 0;
@@ -1623,7 +1637,7 @@ function VpListaCompras({ onBack, onAbrirStock }) {
       {/* Ranking de sectores */}
       <div style={{border:`1px solid ${G.border}`,borderRadius:4,background:G.surf,
         padding:"12px",marginBottom:16}}>
-        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:10}}>RANKING POR SECTOR</div>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:10}}>RANKING DE HOY POR SECTOR</div>
         {rankingSectores.map((s,i) => (
           <div key={s.id} onClick={()=>setSectorActivo(s.id)}
             style={{display:"flex",alignItems:"center",gap:8,padding:"7px 8px",
