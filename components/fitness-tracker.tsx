@@ -2567,6 +2567,7 @@ function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion
   const [receta, setReceta] = useState(recetaSeleccionada || null);
   const [porcionesDeseadas, setPorcionesDeseadas] = useState(String(recetaSeleccionada?.porcionesBase || 4));
   const [cantTuppers, setCantTuppers] = useState(String(recetaSeleccionada?.porcionesBase || 4));
+  const [vinculado, setVinculado] = useState(true); // modo simple: 1 porción = 1 tupper (el uso más común)
   const [stock, setStock] = useState([]);
   const [loading, setLoading] = useState(true);
   const [descontado, setDescontado] = useState(false);
@@ -2616,6 +2617,13 @@ function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion
   const porciones = parseFloat(porcionesDeseadas) || 0;
   const tuppers = parseInt(cantTuppers) || 1;
   const factor = receta.porcionesBase > 0 ? porciones / receta.porcionesBase : 0;
+
+  // En modo vinculado (default), mover uno mueve el otro — así "pasar de 8 a 6" recalcula
+  // TODO junto: cuánto cocinar en total Y cuánto le toca a cada tupper, en un solo gesto.
+  function setCantidad(valor) {
+    setCantTuppers(valor);
+    if (vinculado) setPorcionesDeseadas(valor);
+  }
 
   const nutricionTotal = {
     kcal: receta.nutricion.kcal * factor,
@@ -2704,62 +2712,78 @@ function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion
         <div style={{fontSize:14,fontWeight:700,color:G.text,letterSpacing:1}}>{receta.nombre.toUpperCase()}</div>
       </div>
 
-      {/* Selector de porciones */}
+      {/* Control unificado: en modo simple, 1 número mueve porciones Y tuppers juntos */}
       <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:8}}>
-        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>PORCIONES A COCINAR</div>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>
+          {vinculado ? "🍱 TUPPERS A PREPARAR" : "PORCIONES A COCINAR"}
+        </div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <button onClick={()=>setPorcionesDeseadas(String(Math.max(1,porciones-1)))}
+          <button onClick={()=>setCantidad(String(Math.max(1,tuppers-1)))}
             style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
               color:G.text,fontSize:18,cursor:"pointer"}}>−</button>
-          <input value={porcionesDeseadas} onChange={e=>setPorcionesDeseadas(e.target.value)}
+          <input value={vinculado?cantTuppers:porcionesDeseadas}
+            onChange={e=>vinculado?setCantidad(e.target.value):setPorcionesDeseadas(e.target.value)}
             type="text" inputMode="decimal"
             style={{flex:1,fontSize:22,fontWeight:700,textAlign:"center",
               border:`1px solid ${G.border}`,borderRadius:3,padding:"8px",
               background:G.surf2,color:G.gold,outline:"none",fontFamily:"inherit"}}/>
-          <button onClick={()=>setPorcionesDeseadas(String(porciones+1))}
+          <button onClick={()=>setCantidad(String(tuppers+1))}
             style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
               color:G.text,fontSize:18,cursor:"pointer"}}>+</button>
         </div>
         <div style={{fontSize:10,color:G.textDim,marginTop:6,textAlign:"center"}}>
-          Receta original rinde {receta.porcionesBase} porciones
+          {vinculado
+            ? `Receta cargada para ${receta.porcionesBase} tuppers · se recalcula todo (ingredientes y macros por tupper) al cambiar este número`
+            : `Receta original rinde ${receta.porcionesBase} porciones`}
         </div>
       </div>
 
-      {/* Selector de tuppers */}
-      <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:14}}>
-        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>REPARTIR EN CUÁNTOS TUPPERS</div>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <button onClick={()=>setCantTuppers(String(Math.max(1,tuppers-1)))}
-            style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
-              color:G.text,fontSize:18,cursor:"pointer"}}>−</button>
-          <input value={cantTuppers} onChange={e=>setCantTuppers(e.target.value)}
-            type="text" inputMode="numeric"
-            style={{flex:1,fontSize:22,fontWeight:700,textAlign:"center",
-              border:`1px solid ${G.border}`,borderRadius:3,padding:"8px",
-              background:G.surf2,color:G.gold,outline:"none",fontFamily:"inherit"}}/>
-          <button onClick={()=>setCantTuppers(String(tuppers+1))}
-            style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
-              color:G.text,fontSize:18,cursor:"pointer"}}>+</button>
+      {!vinculado && (
+        <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:8}}>
+          <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>REPARTIR EN CUÁNTOS TUPPERS</div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <button onClick={()=>setCantTuppers(String(Math.max(1,tuppers-1)))}
+              style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
+                color:G.text,fontSize:18,cursor:"pointer"}}>−</button>
+            <input value={cantTuppers} onChange={e=>setCantTuppers(e.target.value)}
+              type="text" inputMode="numeric"
+              style={{flex:1,fontSize:22,fontWeight:700,textAlign:"center",
+                border:`1px solid ${G.border}`,borderRadius:3,padding:"8px",
+                background:G.surf2,color:G.gold,outline:"none",fontFamily:"inherit"}}/>
+            <button onClick={()=>setCantTuppers(String(tuppers+1))}
+              style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
+                color:G.text,fontSize:18,cursor:"pointer"}}>+</button>
+          </div>
+          <div style={{fontSize:10,color:G.textDim,marginTop:6,textAlign:"center"}}>
+            📦 {tuppers} tupper{tuppers!==1?"s":""} · {fmt(porciones/tuppers)} porción{porciones/tuppers!==1?"es":""} cada uno
+          </div>
         </div>
-        <div style={{fontSize:10,color:G.textDim,marginTop:6,textAlign:"center"}}>
-          📦 {tuppers} tupper{tuppers!==1?"s":""} · {fmt(porciones/tuppers)} porción{porciones/tuppers!==1?"es":""} cada uno
-        </div>
+      )}
+
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <button onClick={()=>setVinculado(v=>!v)}
+          style={{fontSize:9,color:G.textDim,background:"none",border:"none",
+            cursor:"pointer",textDecoration:"underline"}}>
+          {vinculado ? "Modo avanzado: usar cantidad de porciones distinta a la de tuppers" : "Volver al modo simple (porciones = tuppers)"}
+        </button>
       </div>
 
       {/* Información nutricional */}
       <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:14}}>
         <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:10}}>INFORMACIÓN NUTRICIONAL</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
-          <div>
-            <div style={{fontSize:9,color:G.textDim,marginBottom:6,letterSpacing:1}}>POR PORCIÓN</div>
-            {[["Kcal",nutricionPorPorcion.kcal,""],["Carbs",nutricionPorPorcion.carbs,"g"],
-              ["Prot",nutricionPorPorcion.prot,"g"],["Grasas",nutricionPorPorcion.grasas,"g"]].map(([lbl,val,u])=>(
-              <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontSize:10,padding:"3px 0"}}>
-                <span style={{color:G.textSec}}>{lbl}</span>
-                <span style={{color:G.text,fontWeight:600}}>{fmt(val)}{u}</span>
-              </div>
-            ))}
-          </div>
+        <div style={{display:"grid",gridTemplateColumns:vinculado?"1fr 1fr":"1fr 1fr 1fr",gap:6}}>
+          {!vinculado && (
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:6,letterSpacing:1}}>POR PORCIÓN</div>
+              {[["Kcal",nutricionPorPorcion.kcal,""],["Carbs",nutricionPorPorcion.carbs,"g"],
+                ["Prot",nutricionPorPorcion.prot,"g"],["Grasas",nutricionPorPorcion.grasas,"g"]].map(([lbl,val,u])=>(
+                <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontSize:10,padding:"3px 0"}}>
+                  <span style={{color:G.textSec}}>{lbl}</span>
+                  <span style={{color:G.text,fontWeight:600}}>{fmt(val)}{u}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div>
             <div style={{fontSize:9,color:G.gold,marginBottom:6,letterSpacing:1}}>POR TUPPER</div>
             {[["Kcal",nutricionPorTupper.kcal,""],["Carbs",nutricionPorTupper.carbs,"g"],
