@@ -681,6 +681,12 @@ const VP_EJERCICIOS_FUERZA = [
   { id:"zancadas",         label:"Zancadas (Lunges)",          unidad:"kg" },
 ];
 
+// Tipos de cardio libre — diferenciados de CrossFit (WOD) y Fuerza (rutina fija)
+const VP_TIPOS_CARDIO = [
+  { id:"correr", label:"🏃 Correr libre" },
+  { id:"soga",   label:"🪢 Salto de soga" },
+];
+
 // ── Paths Firestore — registros y logros (globales, no atados a un día) ──────
 function vpEjercicioPath(ejercicioId) {
   return `vida_personal/_ejercicios/historial/${ejercicioId}`;
@@ -1032,6 +1038,33 @@ function vpCalcularNutricionIngrediente(nombreIngrediente, cantidad, unidad) {
     encontrado: true,
     alimentoUsado: alimento.nombre,
   };
+}
+
+// Determina cuál es el macronutriente dominante de un alimento (por aporte calórico
+// a igual peso: carbs y proteína aportan 4 kcal/g, grasa 9 kcal/g)
+function vpMacroDominante(alimento) {
+  const aportes = {
+    carbs:  alimento.carbs  * 4,
+    prot:   alimento.prot   * 4,
+    grasas: alimento.grasas * 9,
+  };
+  return Object.entries(aportes).sort((a,b)=>b[1]-a[1])[0][0]; // "carbs" | "prot" | "grasas"
+}
+
+// Dado un ingrediente y cuánto FALTA para cubrir el objetivo (restante, ya descontando
+// lo que aportan los demás ingredientes), calcula la cantidad de ESTE ingrediente que
+// cerraría ese faltante, usando su macro dominante como referencia de ajuste.
+// Devuelve la cantidad en la unidad pedida (kg/lts → gramos/1000, u → gramos/100).
+function vpCantidadSugeridaParaObjetivo(nombreIngrediente, unidad, restante) {
+  const alimento = vpBuscarAlimento(nombreIngrediente);
+  if (!alimento) return null;
+  const dominante = vpMacroDominante(alimento);
+  const valorPor100g = alimento[dominante];
+  if (!valorPor100g || valorPor100g <= 0) return null;
+  const faltante = Math.max(0, restante[dominante] || 0);
+  const gramosNecesarios = (faltante / valorPor100g) * 100;
+  const cantidad = (unidad === "kg" || unidad === "lts") ? gramosNecesarios/1000 : gramosNecesarios/100;
+  return { cantidad, dominante, gramosNecesarios };
 }
 
 // ── Notas persistentes por pilar — viven fuera del día, no se pisan ─────────
@@ -1981,6 +2014,85 @@ function VpStock({ onBack }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// TEORÍA — Crudo vs. cocido y método para calcular macros de una receta
+// ═══════════════════════════════════════════════════════════════════════════════
+const VP_FACTORES_COCCION = [
+  { alimento:"Pechuga de pollo",        nota:"pierde ~25-28%", ejemplo:"100g crudo → ~73g cocido" },
+  { alimento:"Carne vacuna (magra)",    nota:"pierde ~25-30%", ejemplo:"100g crudo → ~72g cocido" },
+  { alimento:"Arroz blanco",            nota:"gana ~x2,5-3",   ejemplo:"100g crudo → ~260g cocido" },
+  { alimento:"Pastas",                  nota:"gana ~x2,2-2,5", ejemplo:"100g crudo → ~230g cocido" },
+  { alimento:"Papa / batata hervida",   nota:"pierde poco, ~x0,9", ejemplo:"100g crudo → ~90g cocido" },
+  { alimento:"Legumbres secas",         nota:"gana ~x2,5-3",   ejemplo:"100g crudo → ~270g cocido" },
+];
+
+function VpTeoriaMacros() {
+  const [abierto, setAbierto] = useState(false);
+  return (
+    <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:14}}>
+      <div onClick={()=>setAbierto(a=>!a)}
+        style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",
+          touchAction:"manipulation",WebkitTapHighlightColor:"transparent"}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,fontFamily:"system-ui,sans-serif"}}>
+          📚 TEORÍA: CRUDO VS. COCIDO Y CÁLCULO DE MACROS
+        </div>
+        <div style={{fontSize:11,color:G.textDim}}>{abierto ? "▲" : "▼"}</div>
+      </div>
+      {abierto && (
+        <div style={{marginTop:10,fontFamily:"system-ui,sans-serif"}}>
+          <div style={{fontSize:11,color:G.textSec,lineHeight:1.6,marginBottom:10}}>
+            Las tablas nutricionales están armadas sobre <strong style={{color:G.text}}>peso crudo</strong>.
+            Al cocinar, el agua se va (o se absorbe) y el peso cambia, pero los nutrientes totales no.
+            <strong style={{color:G.gold}}> Por eso siempre hay que pesar y cargar los ingredientes en crudo,
+            antes de cocinar</strong> — nunca busques el valor de algo ya cocido en una tabla de crudo.
+          </div>
+          <div style={{overflowX:"auto",marginBottom:10}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+              <thead>
+                <tr style={{borderBottom:`1px solid ${G.border}`}}>
+                  <th style={{textAlign:"left",padding:"4px 6px",color:G.textDim,fontWeight:600}}>Alimento</th>
+                  <th style={{textAlign:"left",padding:"4px 6px",color:G.textDim,fontWeight:600}}>Factor</th>
+                  <th style={{textAlign:"left",padding:"4px 6px",color:G.textDim,fontWeight:600}}>Ejemplo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {VP_FACTORES_COCCION.map((f,i)=>(
+                  <tr key={i} style={{borderBottom:`1px solid ${G.border}55`}}>
+                    <td style={{padding:"5px 6px",color:G.text}}>{f.alimento}</td>
+                    <td style={{padding:"5px 6px",color:G.gold,whiteSpace:"nowrap"}}>{f.nota}</td>
+                    <td style={{padding:"5px 6px",color:G.textSec,whiteSpace:"nowrap",fontSize:10}}>{f.ejemplo}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{fontSize:11,color:G.textSec,lineHeight:1.6,marginBottom:10}}>
+            <strong style={{color:G.text}}>Método para dividir en tuppers:</strong> cociná todos los
+            ingredientes de la receta juntos, pesá el total ya cocido y dividilo por peso en partes
+            iguales (ej: 2 tuppers = mitad y mitad). Si la mezcla es homogénea, cada tupper tiene
+            exactamente la mitad de los macros totales de la receta — no hace falta recalcular sobre
+            el peso cocido.
+          </div>
+          <div style={{fontSize:11,color:G.textSec,lineHeight:1.6,marginBottom:10}}>
+            <strong style={{color:G.text}}>Objetivos diarios de referencia:</strong> proteína entre
+            1,8-2,2 g por kg de peso corporal protege masa muscular en déficit; un déficit moderado de
+            300-500 kcal por debajo de tu mantenimiento baja grasa sin frenar el rendimiento. El
+            mantenimiento se puede estimar con Mifflin-St Jeor: <span style={{color:G.gold}}>
+            10×peso(kg) + 6,25×altura(cm) − 5×edad + 5</span>, multiplicado por un factor de actividad
+            (~1,55-1,75 si entrenás fuerte la mayoría de los días).
+          </div>
+          <div style={{fontSize:11,color:G.gold,fontWeight:600,lineHeight:1.5}}>
+            👉 Usá esto junto con el "🎯 Objetivo de macros" de cada receta abajo: cargá tu objetivo,
+            metés los ingredientes, y el botón 🎯 en cada uno te calcula cuánto necesitás de ESE
+            ingrediente para cubrir lo que falta — así podés cambiar arroz por papa, por ejemplo,
+            y la cantidad se recalcula sola.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // RECETAS — base de platos: ingredientes + cantidades + info nutricional
 // Carga manual o automática (sube PDF/imagen y la IA extrae los datos)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1992,6 +2104,10 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
   const [carbs, setCarbs] = useState(recetaInicial?.nutricion?.carbs || "");
   const [prot, setProt] = useState(recetaInicial?.nutricion?.prot || "");
   const [grasas, setGrasas] = useState(recetaInicial?.nutricion?.grasas || "");
+  const [objKcal, setObjKcal]     = useState(recetaInicial?.objetivo?.kcal   || "");
+  const [objCarbs, setObjCarbs]   = useState(recetaInicial?.objetivo?.carbs  || "");
+  const [objProt, setObjProt]     = useState(recetaInicial?.objetivo?.prot  || "");
+  const [objGrasas, setObjGrasas] = useState(recetaInicial?.objetivo?.grasas|| "");
   const [archivo, setArchivo] = useState(null);
   const [procesando, setProcesando] = useState(false);
   const [errorIA, setErrorIA] = useState("");
@@ -2041,6 +2157,38 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
   }
   function eliminarIngrediente(i) {
     setIngredientes(ingredientes.filter((_,idx)=>idx!==i));
+  }
+
+  // Objetivo actual como objeto — 0 si el campo está vacío
+  const objetivoActual = {
+    kcal: parseFloat(objKcal)||0, carbs: parseFloat(objCarbs)||0,
+    prot: parseFloat(objProt)||0, grasas: parseFloat(objGrasas)||0,
+  };
+  const hayObjetivo = objetivoActual.kcal>0 || objetivoActual.carbs>0 || objetivoActual.prot>0 || objetivoActual.grasas>0;
+
+  // Ajusta la cantidad del ingrediente i para cubrir lo que falta del objetivo,
+  // sumando lo que ya aportan TODOS LOS DEMÁS ingredientes de la receta.
+  function sugerirCantidad(i) {
+    const ing = ingredientes[i];
+    if (!ing.nombre.trim()) return;
+    const sumaOtros = ingredientes.reduce((acc, o, idx) => {
+      if (idx===i || !o.nombre.trim() || !o.cantidad) return acc;
+      const cant = parseFloat(String(o.cantidad).replace(",","."));
+      if (isNaN(cant)) return acc;
+      const calc = vpCalcularNutricionIngrediente(o.nombre, cant, o.unidad);
+      if (!calc) return acc;
+      return { kcal:acc.kcal+calc.kcal, carbs:acc.carbs+calc.carbs, prot:acc.prot+calc.prot, grasas:acc.grasas+calc.grasas };
+    }, { kcal:0, carbs:0, prot:0, grasas:0 });
+
+    const restante = {
+      kcal:   objetivoActual.kcal   - sumaOtros.kcal,
+      carbs:  objetivoActual.carbs  - sumaOtros.carbs,
+      prot:   objetivoActual.prot   - sumaOtros.prot,
+      grasas: objetivoActual.grasas - sumaOtros.grasas,
+    };
+    const sugerido = vpCantidadSugeridaParaObjetivo(ing.nombre, ing.unidad, restante);
+    if (!sugerido) return;
+    actualizarIngrediente(i, "cantidad", sugerido.cantidad.toFixed(2));
   }
 
   // Convierte el archivo a base64 y pide a la IA que extraiga la receta estructurada
@@ -2148,6 +2296,10 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
         kcal: parseFloat(kcal)||0, carbs: parseFloat(carbs)||0,
         prot: parseFloat(prot)||0, grasas: parseFloat(grasas)||0,
       },
+      objetivo: {
+        kcal: parseFloat(objKcal)||0, carbs: parseFloat(objCarbs)||0,
+        prot: parseFloat(objProt)||0, grasas: parseFloat(objGrasas)||0,
+      },
       creado: recetaInicial?.creado || Date.now(),
     });
   }
@@ -2180,7 +2332,27 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
       <input value={porcionesBase} onChange={e=>setPorcionesBase(e.target.value)} type="number"
         style={{...S.inp(false),marginBottom:10,width:80}}/>
 
-      <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6}}>INGREDIENTES</div>
+      <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6}}>
+        🎯 OBJETIVO DE MACROS (opcional — para esta receta/porción)
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:4,marginBottom:6}}>
+        {[["Kcal",objKcal,setObjKcal],["Carb(g)",objCarbs,setObjCarbs],
+          ["Prot(g)",objProt,setObjProt],["Gras(g)",objGrasas,setObjGrasas]].map(([lbl,val,setter])=>(
+          <div key={lbl}>
+            <div style={{fontSize:8,color:G.textDim,marginBottom:2}}>{lbl}</div>
+            <input value={val} onChange={e=>setter(e.target.value)} type="text" inputMode="decimal"
+              placeholder="0" style={{...S.inp(false),textAlign:"center",fontSize:12}}/>
+          </div>
+        ))}
+      </div>
+      {hayObjetivo && (
+        <div style={{fontSize:9,color:G.textDim,marginBottom:10,lineHeight:1.4,fontFamily:"system-ui,sans-serif"}}>
+          Cargá el objetivo, agregá tus ingredientes y usá el botón 🎯 en cada uno para que
+          la app calcule la cantidad que le falta para cubrirlo (según su macro dominante).
+        </div>
+      )}
+
+      <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6,marginTop:hayObjetivo?0:10}}>INGREDIENTES</div>
       {ingredientes.map((ing,i)=>(
         <div key={i} style={{display:"flex",gap:4,marginBottom:5}}>
           <input value={ing.nombre} onChange={e=>actualizarIngrediente(i,"nombre",e.target.value)}
@@ -2191,6 +2363,13 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
             style={{...S.inp(false),flex:1,cursor:"pointer"}}>
             {VP_UNIDADES.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}
           </select>
+          {hayObjetivo && (
+            <button onClick={()=>sugerirCantidad(i)} title="Ajustar cantidad para cubrir el objetivo"
+              style={{background:G.goldDim,border:`1px solid ${G.goldMid}`,color:G.gold,fontSize:12,
+                borderRadius:3,cursor:"pointer",padding:"0 8px",flexShrink:0}}>
+              🎯
+            </button>
+          )}
           <button onClick={()=>eliminarIngrediente(i)}
             style={{background:"none",border:"none",color:G.textDim,fontSize:16,cursor:"pointer",padding:"0 4px"}}>×</button>
         </div>
@@ -2235,6 +2414,36 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
           </div>
         ))}
       </div>
+
+      {hayObjetivo && (
+        <div style={{border:`1px solid ${G.gold}44`,borderRadius:4,padding:"10px",marginBottom:12,background:G.surf2}}>
+          <div style={{fontSize:9,color:G.gold,letterSpacing:1,marginBottom:8,fontFamily:"system-ui,sans-serif"}}>
+            OBJETIVO VS. CALCULADO
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:4}}>
+            {[["Kcal",objetivoActual.kcal,nutricionCalculada.kcal],
+              ["Carb",objetivoActual.carbs,nutricionCalculada.carbs],
+              ["Prot",objetivoActual.prot,nutricionCalculada.prot],
+              ["Gras",objetivoActual.grasas,nutricionCalculada.grasas]].map(([lbl,obj,calc])=>{
+              const delta = calc - obj;
+              const cerca = obj>0 && Math.abs(delta)/obj <= 0.05;
+              const color = obj===0 ? G.textDim : cerca ? "#7AB85A" : delta<0 ? "#C9724C" : "#C9A84C";
+              return (
+                <div key={lbl} style={{textAlign:"center"}}>
+                  <div style={{fontSize:8,color:G.textDim}}>{lbl}</div>
+                  <div style={{fontSize:13,fontWeight:700,color}}>{Math.round(calc)}</div>
+                  <div style={{fontSize:8,color:G.textDim}}>obj. {Math.round(obj)}</div>
+                  {obj>0 && (
+                    <div style={{fontSize:9,fontWeight:600,color}}>
+                      {delta>0?"+":""}{Math.round(delta)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div style={{display:"flex",gap:6}}>
         <button onClick={guardar}
@@ -2292,6 +2501,8 @@ function VpRecetasScreen({ onBack, onUsarReceta }) {
           RECETAS
         </div>
       </div>
+
+      <VpTeoriaMacros />
 
       {mostrarForm ? (
         <VpRecetaForm recetaInicial={editando}
