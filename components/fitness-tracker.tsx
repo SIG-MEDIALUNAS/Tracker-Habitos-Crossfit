@@ -2093,6 +2093,18 @@ function VpTeoriaMacros() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// CALCULADORA DE OBJETIVO FIJO — objetivo por tupper fijo (déficit ya contemplado,
+// calculado en base a 86,5kg / 1.80m / 25 años / entrenamiento fuerte), el variable
+// es la cantidad de tuppers: cargás ingredientes crudos totales, elegís en cuántos
+// tuppers se reparte, y te dice si cubre el objetivo o cuánto falta agregar de cada uno.
+// ═══════════════════════════════════════════════════════════════════════════════
+const VP_OBJETIVO_TUPPER_FIJO_DEFAULT = { kcal:1190, carbs:145, prot:75, grasas:35 };
+
+function vpCalculadoraObjetivoPath() {
+  return "vida_personal/_nutricion/calculadora_objetivo/actual";
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // RECETAS — base de platos: ingredientes + cantidades + info nutricional
 // Carga manual o automática (sube PDF/imagen y la IA extrae los datos)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2856,6 +2868,245 @@ function VpCocina({ onBack, onVerRecetas, recetaSeleccionada, onLimpiarSeleccion
       </button>
       <div style={{fontSize:10,color:G.textDim,marginTop:8,textAlign:"center"}}>
         Si algo no coincide, podés ajustarlo manualmente después en 📦 Stock
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CALCULADORA DE OBJETIVO FIJO
+// Al revés de Cocina/Recetas: acá el objetivo por tupper NO se toca (es fijo, ya
+// calculado con déficit contemplado). Lo único que cambia es cuántos tuppers salen
+// del total cargado. Cargás los ingredientes en su valor CRUDO TOTAL (lo que vas a
+// cocinar), elegís en cuántos tuppers se reparte, y te dice si con eso cubrís el
+// objetivo o cuánto de cada ingrediente te falta agregar — expresado por tupper,
+// para que sepas exactamente cuánto sumar al dividir manualmente.
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpCalculadoraObjetivo({ onBack }) {
+  const [ingredientes, setIngredientes] = useState([{nombre:"",cantidad:"",unidad:"kg"}]);
+  const [tuppers, setTuppers] = useState("2");
+  const [objetivo, setObjetivo] = useState(VP_OBJETIVO_TUPPER_FIJO_DEFAULT);
+  const [editandoObjetivo, setEditandoObjetivo] = useState(false);
+  const [tablaLista, setTablaLista] = useState(!!vpTablaNutricionalCache);
+  const [loading, setLoading] = useState(true);
+
+  // Precarga tabla nutricional + estado guardado de la calculadora
+  useEffect(() => {
+    if (!vpTablaNutricionalCache) vpCargarTablaNutricional().then(()=>setTablaLista(true));
+    else setTablaLista(true);
+    if (!firebaseOk) { setLoading(false); return; }
+    getDoc(doc(db, vpCalculadoraObjetivoPath())).then(snap => {
+      if (snap.exists()) {
+        const d = snap.data();
+        if (d.ingredientes?.length) setIngredientes(d.ingredientes);
+        if (d.tuppers) setTuppers(String(d.tuppers));
+        if (d.objetivo) setObjetivo(d.objetivo);
+      }
+      setLoading(false);
+    }).catch(()=>setLoading(false));
+  }, []);
+
+  // Persistencia liviana — se guarda solo, sin botón, cada vez que cambia algo
+  useEffect(() => {
+    if (loading || !firebaseOk) return;
+    const t = setTimeout(() => {
+      setDoc(doc(db, vpCalculadoraObjetivoPath()), { ingredientes, tuppers:parseInt(tuppers)||1, objetivo }).catch(()=>{});
+    }, 600);
+    return () => clearTimeout(t);
+  }, [JSON.stringify(ingredientes), tuppers, JSON.stringify(objetivo), loading]);
+
+  const tuppersNum = parseInt(tuppers) || 1;
+
+  const totalCargado = !tablaLista ? { kcal:0,carbs:0,prot:0,grasas:0 } : ingredientes.reduce((acc, ing) => {
+    if (!ing.nombre.trim() || !ing.cantidad) return acc;
+    const cant = parseFloat(String(ing.cantidad).replace(",","."));
+    if (isNaN(cant)) return acc;
+    const calc = vpCalcularNutricionIngrediente(ing.nombre, cant, ing.unidad);
+    if (!calc) return acc;
+    return { kcal:acc.kcal+calc.kcal, carbs:acc.carbs+calc.carbs, prot:acc.prot+calc.prot, grasas:acc.grasas+calc.grasas };
+  }, { kcal:0, carbs:0, prot:0, grasas:0 });
+
+  const porTupper = {
+    kcal:   totalCargado.kcal   / tuppersNum,
+    carbs:  totalCargado.carbs  / tuppersNum,
+    prot:   totalCargado.prot   / tuppersNum,
+    grasas: totalCargado.grasas / tuppersNum,
+  };
+  const objetivoTotal = {
+    kcal:   objetivo.kcal   * tuppersNum,
+    carbs:  objetivo.carbs  * tuppersNum,
+    prot:   objetivo.prot   * tuppersNum,
+    grasas: objetivo.grasas * tuppersNum,
+  };
+
+  function actualizarIngrediente(i, campo, valor) {
+    setIngredientes(ingredientes.map((ing,idx)=>idx===i?{...ing,[campo]:valor}:ing));
+  }
+  function agregarIngrediente() {
+    setIngredientes([...ingredientes, {nombre:"",cantidad:"",unidad:"kg"}]);
+  }
+  function eliminarIngrediente(i) {
+    setIngredientes(ingredientes.filter((_,idx)=>idx!==i));
+  }
+
+  // Ajusta el ingrediente i a la cantidad TOTAL necesaria para cubrir el objetivo total
+  // (objetivo fijo × tuppers), descontando lo que ya aportan los demás ingredientes.
+  function sugerirCantidad(i) {
+    const ing = ingredientes[i];
+    if (!ing.nombre.trim()) return;
+    const sumaOtros = ingredientes.reduce((acc, o, idx) => {
+      if (idx===i || !o.nombre.trim() || !o.cantidad) return acc;
+      const cant = parseFloat(String(o.cantidad).replace(",","."));
+      if (isNaN(cant)) return acc;
+      const calc = vpCalcularNutricionIngrediente(o.nombre, cant, o.unidad);
+      if (!calc) return acc;
+      return { kcal:acc.kcal+calc.kcal, carbs:acc.carbs+calc.carbs, prot:acc.prot+calc.prot, grasas:acc.grasas+calc.grasas };
+    }, { kcal:0, carbs:0, prot:0, grasas:0 });
+    const restante = {
+      kcal:   objetivoTotal.kcal   - sumaOtros.kcal,
+      carbs:  objetivoTotal.carbs  - sumaOtros.carbs,
+      prot:   objetivoTotal.prot   - sumaOtros.prot,
+      grasas: objetivoTotal.grasas - sumaOtros.grasas,
+    };
+    const sugerido = vpCantidadSugeridaParaObjetivo(ing.nombre, ing.unidad, restante);
+    if (!sugerido) return;
+    actualizarIngrediente(i, "cantidad", sugerido.cantidad.toFixed(2));
+  }
+
+  // Gramos por tupper de un ingrediente — para el cartelito "→ Xg por tupper"
+  function gramosPorTupper(ing) {
+    if (!ing.cantidad) return null;
+    const cant = parseFloat(String(ing.cantidad).replace(",","."));
+    if (isNaN(cant)) return null;
+    const gramosTotales = (ing.unidad==="kg"||ing.unidad==="lts") ? cant*1000 : cant*100;
+    return gramosTotales / tuppersNum;
+  }
+
+  const fmt = n => n.toLocaleString("es-AR",{minimumFractionDigits:0,maximumFractionDigits:0});
+
+  return (
+    <div style={{minHeight:"100vh",background:G.bg,fontFamily:"system-ui,sans-serif",
+      padding:"24px 16px 56px",maxWidth:430,margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+        <button onClick={onBack} style={S.btn(false,false)}>← Nutrición</button>
+      </div>
+      <div style={{textAlign:"center",marginBottom:16}}>
+        <div style={{fontSize:28,marginBottom:6}}>🎯</div>
+        <div style={{fontSize:14,fontWeight:700,color:G.text,letterSpacing:1,fontFamily:"'Courier New',monospace"}}>
+          CALCULADORA DE OBJETIVO
+        </div>
+        <div style={{fontSize:10,color:G.textDim,marginTop:4}}>
+          Objetivo fijo por tupper · vos cargás lo crudo, elegís cuántos tuppers salen
+        </div>
+      </div>
+
+      {/* Objetivo fijo por tupper */}
+      <div style={{border:`1px solid ${G.gold}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div style={{fontSize:9,color:G.gold,letterSpacing:2}}>OBJETIVO FIJO POR TUPPER</div>
+          <button onClick={()=>setEditandoObjetivo(e=>!e)}
+            style={{fontSize:9,color:G.textDim,background:"none",border:"none",cursor:"pointer",textDecoration:"underline"}}>
+            {editandoObjetivo ? "listo" : "editar"}
+          </button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:4}}>
+          {[["Kcal","kcal"],["Carb(g)","carbs"],["Prot(g)","prot"],["Gras(g)","grasas"]].map(([lbl,key])=>(
+            <div key={key}>
+              <div style={{fontSize:8,color:G.textDim,marginBottom:2}}>{lbl}</div>
+              {editandoObjetivo ? (
+                <input value={objetivo[key]} onChange={e=>setObjetivo({...objetivo,[key]:parseFloat(e.target.value)||0})}
+                  type="text" inputMode="decimal" style={{...S.inp(false),textAlign:"center",fontSize:12}}/>
+              ) : (
+                <div style={{fontSize:14,fontWeight:700,color:G.gold,textAlign:"center"}}>{objetivo[key]}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tuppers — el valor variable */}
+      <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"14px",background:G.surf,marginBottom:8}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>🍱 CUÁNTOS TUPPERS SALEN DE ESTO</div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <button onClick={()=>setTuppers(String(Math.max(1,tuppersNum-1)))}
+            style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
+              color:G.text,fontSize:18,cursor:"pointer"}}>−</button>
+          <input value={tuppers} onChange={e=>setTuppers(e.target.value)}
+            type="text" inputMode="numeric"
+            style={{flex:1,fontSize:22,fontWeight:700,textAlign:"center",
+              border:`1px solid ${G.border}`,borderRadius:3,padding:"8px",
+              background:G.surf2,color:G.gold,outline:"none",fontFamily:"inherit"}}/>
+          <button onClick={()=>setTuppers(String(tuppersNum+1))}
+            style={{width:36,height:36,borderRadius:3,background:G.surf2,border:`1px solid ${G.border}`,
+              color:G.text,fontSize:18,cursor:"pointer"}}>+</button>
+        </div>
+      </div>
+
+      {/* Ingredientes crudos totales */}
+      <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>INGREDIENTES (VALOR CRUDO TOTAL)</div>
+        {ingredientes.map((ing,i)=>{
+          const gTupper = gramosPorTupper(ing);
+          return (
+            <div key={i} style={{marginBottom:8}}>
+              <div style={{display:"flex",gap:4}}>
+                <input value={ing.nombre} onChange={e=>actualizarIngrediente(i,"nombre",e.target.value)}
+                  placeholder="Ingrediente" style={{...S.inp(false),flex:2}}/>
+                <input value={ing.cantidad} onChange={e=>actualizarIngrediente(i,"cantidad",e.target.value)}
+                  placeholder="Cant." type="text" inputMode="decimal" style={{...S.inp(false),flex:1,textAlign:"center"}}/>
+                <select value={ing.unidad} onChange={e=>actualizarIngrediente(i,"unidad",e.target.value)}
+                  style={{...S.inp(false),flex:1,cursor:"pointer"}}>
+                  {VP_UNIDADES.map(u=><option key={u.id} value={u.id}>{u.label}</option>)}
+                </select>
+                <button onClick={()=>sugerirCantidad(i)} title="Ajustar cantidad para cubrir el objetivo"
+                  style={{background:G.goldDim,border:`1px solid ${G.goldMid}`,color:G.gold,fontSize:12,
+                    borderRadius:3,cursor:"pointer",padding:"0 8px",flexShrink:0}}>
+                  🎯
+                </button>
+                <button onClick={()=>eliminarIngrediente(i)}
+                  style={{background:"none",border:"none",color:G.textDim,fontSize:16,cursor:"pointer",padding:"0 4px"}}>×</button>
+              </div>
+              {gTupper!=null && gTupper>0 && (
+                <div style={{fontSize:9,color:G.textDim,marginTop:2,marginLeft:2}}>
+                  → {fmt(gTupper)}g por tupper
+                </div>
+              )}
+            </div>
+          );
+        })}
+        <button onClick={agregarIngrediente}
+          style={{fontSize:10,color:G.textSec,background:"none",border:`1px dashed ${G.border}`,
+            borderRadius:3,padding:"6px 10px",cursor:"pointer"}}>
+          + Agregar ingrediente
+        </button>
+      </div>
+
+      {/* Comparación objetivo vs calculado, por tupper */}
+      <div style={{border:`1px solid ${G.gold}44`,borderRadius:4,padding:"12px",marginBottom:14,background:G.surf2}}>
+        <div style={{fontSize:9,color:G.gold,letterSpacing:1,marginBottom:8}}>POR TUPPER: OBJETIVO VS. LO CARGADO</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:4}}>
+          {[["Kcal",objetivo.kcal,porTupper.kcal],["Carb",objetivo.carbs,porTupper.carbs],
+            ["Prot",objetivo.prot,porTupper.prot],["Gras",objetivo.grasas,porTupper.grasas]].map(([lbl,obj,calc])=>{
+            const delta = calc - obj;
+            const cerca = obj>0 && Math.abs(delta)/obj <= 0.05;
+            const color = obj===0 ? G.textDim : cerca ? "#7AB85A" : delta<0 ? "#C9724C" : "#C9A84C";
+            return (
+              <div key={lbl} style={{textAlign:"center"}}>
+                <div style={{fontSize:8,color:G.textDim}}>{lbl}</div>
+                <div style={{fontSize:14,fontWeight:700,color}}>{fmt(calc)}</div>
+                <div style={{fontSize:8,color:G.textDim}}>obj. {fmt(obj)}</div>
+                <div style={{fontSize:9,fontWeight:600,color}}>{delta>0?"+":""}{fmt(delta)}</div>
+              </div>
+            );
+          })}
+        </div>
+        {(porTupper.kcal < objetivo.kcal*0.95) && (
+          <div style={{fontSize:10,color:"#C9724C",marginTop:8,lineHeight:1.5}}>
+            ⚠️ Todavía no llega al objetivo. Usá el botón 🎯 en el ingrediente que quieras sumar
+            (ej: el que aporte más proteína si falta proteína) — te va a decir la cantidad TOTAL
+            a cargar, y abajo de cada uno ves cuánto es eso por tupper.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3951,7 +4202,7 @@ function VpTuppersReales({ consumidosHoy, onConsumir }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // REGISTRO DIARIO DE UN PILAR
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbrirTablaNutricional }) {
+function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbrirTablaNutricional, onAbrirCalculadoraObjetivo }) {
   const [habitos, setHabitos] = useState(datos?.habitos || {});
   const [nota, setNota]       = useState(datos?.nota || "");
   // fitness extras
@@ -4209,6 +4460,15 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
               📊 TABLA
             </button>
           </div>
+          <div style={{marginBottom:8}}>
+            <button onClick={()=>onAbrirCalculadoraObjetivo?.()}
+              style={{width:"100%",padding:"10px 4px",borderRadius:3,
+                border:`1px solid ${G.goldMid}`,background:G.goldDim,
+                color:G.gold,fontSize:10,fontWeight:600,cursor:"pointer",
+                touchAction:"manipulation",WebkitTapHighlightColor:"transparent"}}>
+              🎯 CALCULADORA DE OBJETIVO (crudo → tuppers)
+            </button>
+          </div>
 
           {/* Tuppers reales preparados desde Cocina — única fuente de info de comidas */}
           <VpTuppersReales consumidosHoy={tuppersConsumidos} onConsumir={registrarConsumo} />
@@ -4242,7 +4502,7 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
 // ═══════════════════════════════════════════════════════════════════════════════
 // DÍA COMPLETO — todos los pilares con tabs
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpDayView({ mesId, wIdx, dIdx, pilarInicial, onBack, onAbrirCocina, onAbrirStock, onAbrirTablaNutricional }) {
+function VpDayView({ mesId, wIdx, dIdx, pilarInicial, onBack, onAbrirCocina, onAbrirStock, onAbrirTablaNutricional, onAbrirCalculadoraObjetivo }) {
   const [pilarActivo, setPilarActivo] = useState(pilarInicial || "fe");
   const [datos, setDatos]             = useState({});
   const [loading, setLoading]         = useState(true);
@@ -4339,6 +4599,7 @@ function VpDayView({ mesId, wIdx, dIdx, pilarInicial, onBack, onAbrirCocina, onA
           onAbrirCocina={onAbrirCocina}
           onAbrirStock={onAbrirStock}
           onAbrirTablaNutricional={onAbrirTablaNutricional}
+          onAbrirCalculadoraObjetivo={onAbrirCalculadoraObjetivo}
         />
       )}
     </div>
@@ -4817,6 +5078,7 @@ function VpApp() {
   const [mostrarCocina, setMostrarCocina]   = useState(false);
   const [mostrarRecetas, setMostrarRecetas] = useState(false);
   const [mostrarTablaNutricional, setMostrarTablaNutricional] = useState(false);
+  const [mostrarCalculadoraObjetivo, setMostrarCalculadoraObjetivo] = useState(false);
   const [recetaParaCocinar, setRecetaParaCocinar] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [nav, setNav]     = useState("month"); // month | week | day
@@ -4849,6 +5111,11 @@ function VpApp() {
   // Tabla nutricional — gestión completa, fuente de datos para Recetas
   if (mostrarTablaNutricional) {
     return <VpTablaNutricional onBack={() => setMostrarTablaNutricional(false)} />;
+  }
+
+  // Calculadora de objetivo fijo — crudo total → tuppers variable
+  if (mostrarCalculadoraObjetivo) {
+    return <VpCalculadoraObjetivo onBack={() => setMostrarCalculadoraObjetivo(false)} />;
   }
 
   // Recetas — pantalla independiente, conecta hacia Cocina al elegir "cocinar esta receta"
@@ -4985,6 +5252,7 @@ function VpApp() {
             onAbrirCocina={()=>setMostrarCocina(true)}
             onAbrirStock={()=>setMostrarStock(true)}
             onAbrirTablaNutricional={()=>setMostrarTablaNutricional(true)}
+            onAbrirCalculadoraObjetivo={()=>setMostrarCalculadoraObjetivo(true)}
           />
         )}
       </div>
