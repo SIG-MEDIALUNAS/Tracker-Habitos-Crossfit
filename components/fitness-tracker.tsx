@@ -1067,6 +1067,60 @@ function vpCantidadSugeridaParaObjetivo(nombreIngrediente, unidad, restante) {
   return { cantidad, dominante, gramosNecesarios };
 }
 
+// Agrupa todos los alimentos de la tabla nutricional según su macro dominante
+function vpAgruparAlimentosPorMacro(tabla) {
+  const grupos = { carbs:[], prot:[], grasas:[] };
+  tabla.forEach(a => { grupos[vpMacroDominante(a)].push(a.nombre); });
+  grupos.carbs.sort((a,b)=>a.localeCompare(b,"es"));
+  grupos.prot.sort((a,b)=>a.localeCompare(b,"es"));
+  grupos.grasas.sort((a,b)=>a.localeCompare(b,"es"));
+  return grupos;
+}
+
+// Selector de ingrediente — desplegable agrupado por macro dominante (carbos/prot/grasas),
+// tomado de la tabla nutricional. Si el nombre cargado no coincide con nada de la tabla
+// (ingrediente propio, no catalogado), cae solo en modo texto libre.
+function VpSelectorIngrediente({ value, onChange }) {
+  const tabla = vpTablaNutricionalCache || VP_TABLA_NUTRICIONAL_SEED;
+  const grupos = vpAgruparAlimentosPorMacro(tabla);
+  const key = vpNormalizarNombre(value||"");
+  const coincideExacto = !!value && tabla.some(a=>vpNormalizarNombre(a.nombre)===key);
+  const [modoManual, setModoManual] = useState(!!value && !coincideExacto);
+
+  if (modoManual) {
+    return (
+      <div style={{display:"flex",gap:2,flex:2}}>
+        <input value={value} onChange={e=>onChange(e.target.value)}
+          placeholder="Ingrediente" style={{...S.inp(false),flex:1}}/>
+        <button onClick={()=>setModoManual(false)} title="Elegir de la lista"
+          style={{background:"none",border:`1px solid ${G.border}`,borderRadius:3,
+            color:G.textDim,fontSize:11,cursor:"pointer",padding:"0 6px",flexShrink:0}}>
+          ☰
+        </button>
+      </div>
+    );
+  }
+  return (
+    <select value={coincideExacto?value:""} onChange={e=>{
+        if (e.target.value==="__manual__") { setModoManual(true); onChange(""); }
+        else onChange(e.target.value);
+      }}
+      style={{...S.inp(false),flex:2,cursor:"pointer"}}>
+      <option value="" disabled>Elegir ingrediente…</option>
+      <option value="__manual__">✍️ Otro (escribir)</option>
+      <optgroup label="🍞 Carbohidratos">
+        {grupos.carbs.map(n=><option key={n} value={n}>{n}</option>)}
+      </optgroup>
+      <optgroup label="🍗 Proteínas">
+        {grupos.prot.map(n=><option key={n} value={n}>{n}</option>)}
+      </optgroup>
+      <optgroup label="🥑 Grasas">
+        {grupos.grasas.map(n=><option key={n} value={n}>{n}</option>)}
+      </optgroup>
+    </select>
+  );
+}
+
 // ── Notas persistentes por pilar — viven fuera del día, no se pisan ─────────
 // Cada pilar tiene su propia colección de notas (texto + fecha), independiente
 // del registro diario de hábitos. Sirven para recordar cosas entre días.
@@ -2367,8 +2421,7 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
       <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6,marginTop:hayObjetivo?0:10}}>INGREDIENTES</div>
       {ingredientes.map((ing,i)=>(
         <div key={i} style={{display:"flex",gap:4,marginBottom:5}}>
-          <input value={ing.nombre} onChange={e=>actualizarIngrediente(i,"nombre",e.target.value)}
-            placeholder="Ingrediente" style={{...S.inp(false),flex:2}}/>
+          <VpSelectorIngrediente value={ing.nombre} onChange={v=>actualizarIngrediente(i,"nombre",v)} />
           <input value={ing.cantidad} onChange={e=>actualizarIngrediente(i,"cantidad",e.target.value)}
             placeholder="Cant." type="text" inputMode="decimal" style={{...S.inp(false),flex:1,textAlign:"center"}}/>
           <select value={ing.unidad} onChange={e=>actualizarIngrediente(i,"unidad",e.target.value)}
@@ -3050,8 +3103,7 @@ function VpCalculadoraObjetivo({ onBack }) {
           return (
             <div key={i} style={{marginBottom:8}}>
               <div style={{display:"flex",gap:4}}>
-                <input value={ing.nombre} onChange={e=>actualizarIngrediente(i,"nombre",e.target.value)}
-                  placeholder="Ingrediente" style={{...S.inp(false),flex:2}}/>
+                <VpSelectorIngrediente value={ing.nombre} onChange={v=>actualizarIngrediente(i,"nombre",v)} />
                 <input value={ing.cantidad} onChange={e=>actualizarIngrediente(i,"cantidad",e.target.value)}
                   placeholder="Cant." type="text" inputMode="decimal" style={{...S.inp(false),flex:1,textAlign:"center"}}/>
                 <select value={ing.unidad} onChange={e=>actualizarIngrediente(i,"unidad",e.target.value)}
