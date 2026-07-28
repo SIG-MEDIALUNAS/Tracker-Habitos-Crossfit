@@ -697,12 +697,16 @@ function vpLogrosPath() {
 
 // ── Trofeos — catálogo visual por categoría ───────────────────────────────────
 const VP_TROFEOS = {
-  peso:    { emoji:"🏆", color:"#C9A84C", label:"Récord de Peso" },
-  tiempo:  { emoji:"⏱️", color:"#6FA3D4", label:"Récord de Tiempo" },
-  reps:    { emoji:"🔥", color:"#C9724C", label:"Récord de Reps" },
-  rondas:  { emoji:"🌀", color:"#A07AC9", label:"Récord de Rondas" },
-  fe:      { emoji:"✝️", color:"#C9A84C", label:"Hito de Fe" },
-  manual:  { emoji:"⭐", color:"#7AB85A", label:"Logro Personal" },
+  peso:      { emoji:"🏆", color:"#C9A84C", label:"Récord de Peso" },
+  tiempo:    { emoji:"⏱️", color:"#6FA3D4", label:"Récord de Tiempo" },
+  reps:      { emoji:"🔥", color:"#C9724C", label:"Récord de Reps" },
+  rondas:    { emoji:"🌀", color:"#A07AC9", label:"Récord de Rondas" },
+  fe:        { emoji:"✝️", color:"#C9A84C", label:"Hito de Fe" },
+  manual:    { emoji:"⭐", color:"#7AB85A", label:"Logro Personal" },
+  // ── Cardio ──────────────────────────────────────────────────────────────────
+  distancia: { emoji:"🏃", color:"#4ABFB5", label:"Récord de Distancia" },
+  ritmo:     { emoji:"⚡", color:"#D4C46F", label:"Mejor Ritmo" },
+  saltos:    { emoji:"🪢", color:"#C97AC9", label:"Récord de Saltos" },
 };
 
 // Convierte "MM:SS" a segundos para comparar tiempos (menor = mejor)
@@ -712,6 +716,30 @@ function vpTiempoASegundos(str) {
   if (m) return parseInt(m[1])*60 + parseInt(m[2]);
   const n = parseFloat(str);
   return isNaN(n) ? null : n;
+}
+
+// Soporta "MM:SS" y "H:MM:SS" — para cardio donde la duración puede superar 1h
+function vpDuracionASegundos(str) {
+  if (!str) return null;
+  const hms = str.match(/^(\d+):(\d{1,2}):(\d{2})$/); // H:MM:SS
+  if (hms) return parseInt(hms[1])*3600 + parseInt(hms[2])*60 + parseInt(hms[3]);
+  const ms = str.match(/^(\d+):(\d{2})$/);             // MM:SS
+  if (ms)  return parseInt(ms[1])*60 + parseInt(ms[2]);
+  const n = parseFloat(str);
+  return isNaN(n) ? null : n;
+}
+
+// Formatea segundos/km → "M'SS''/km"
+function vpSegundosARitmo(segPorKm) {
+  if (!segPorKm || segPorKm <= 0 || !isFinite(segPorKm)) return "—";
+  const m = Math.floor(segPorKm / 60);
+  const s = Math.round(segPorKm % 60).toString().padStart(2, "0");
+  return `${m}'${s}''/km`;
+}
+
+// Path Firestore para cardio (misma familia que vpEjercicioPath)
+function vpCardioPath(tipoId) {
+  return `vida_personal/_ejercicios/historial/cardio_${tipoId}`;
 }
 
 // Compara marca nueva vs mejor histórica y determina si es PR
@@ -3994,6 +4022,366 @@ function VpRegistroEjercicio({ baseEjercicios, onLogroNuevo }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// CARDIO — Correr libre + Salto de soga, PRs automáticos, historial
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
+  const [tipo,          setTipo]          = useState("correr");
+  // correr
+  const [distancia,     setDistancia]     = useState("");
+  const [duracion,      setDuracion]      = useState("");
+  const [calApp,        setCalApp]        = useState("");
+  const [cadencia,      setCadencia]      = useState("");
+  const [pasosTotales,  setPasosTotales]  = useState("");
+  // soga
+  const [sogaDuracion,  setSogaDuracion]  = useState("");
+  const [saltos,        setSaltos]        = useState("");
+  const [sogaCal,       setSogaCal]       = useState("");
+  // comunes
+  const [peso,          setPeso]          = useState(String(pesoDefault));
+  const [chaleco,       setChaleco]       = useState("0");
+  const [nota,          setNota]          = useState("");
+  const [forzarLogro,   setForzarLogro]   = useState(false);
+  const [guardando,     setGuardando]     = useState(false);
+  const [ultimoRes,     setUltimoRes]     = useState(null);
+  const [historial,     setHistorial]     = useState([]);
+  const [loadingHist,   setLoadingHist]   = useState(true);
+
+  // Cargar historial al montar y al cambiar tipo
+  useEffect(() => {
+    setHistorial([]); setLoadingHist(true);
+    if (!firebaseOk) { setLoadingHist(false); return; }
+    getDoc(doc(db, vpCardioPath(tipo)))
+      .then(snap => { setHistorial(snap.exists() ? snap.data().marcas || [] : []); })
+      .catch(() => {})
+      .finally(() => setLoadingHist(false));
+  }, [tipo]);
+
+  // Cálculos derivados (correr)
+  const durSeg     = vpDuracionASegundos(duracion);
+  const distNum    = parseFloat(distancia.replace(",", ".")) || 0;
+  const ritmoSeg   = (durSeg && distNum >= 0.01) ? durSeg / distNum : null;
+  const ritmoFmt   = vpSegundosARitmo(ritmoSeg);
+  const pesoNum    = parseFloat(String(peso).replace(",", "."))    || pesoDefault;
+  const chalecoNum = parseFloat(String(chaleco).replace(",", ".")) || 0;
+  const calAppNum  = parseFloat(String(tipo === "soga" ? sogaCal : calApp).replace(",", ".")) || 0;
+  const calAjustadas = (chalecoNum > 0 && pesoNum > 0 && calAppNum > 0)
+    ? Math.round(calAppNum * (pesoNum + chalecoNum) / pesoNum)
+    : calAppNum > 0 ? Math.round(calAppNum) : null;
+
+  async function registrar() {
+    setGuardando(true);
+    const path = vpCardioPath(tipo);
+    let hist = [];
+    if (firebaseOk) {
+      try { const s = await getDoc(doc(db, path)); hist = s.exists() ? s.data().marcas || [] : []; }
+      catch(e) {}
+    }
+
+    let marca = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      fecha: Date.now(), tipo,
+      nota: nota || null,
+      pesoKg: pesoNum,
+      chalecoKg: chalecoNum || null,
+      calAjustadas,
+      esPR: false,
+      manual: forzarLogro,
+    };
+
+    let esPR = false;
+    let tipoTrofeo = "manual";
+    let detalleLogro = "";
+
+    if (tipo === "correr") {
+      const distVal  = distNum > 0 ? distNum : null;
+      const durVal   = durSeg  > 0 ? durSeg  : null;
+      const cadVal   = cadencia     ? parseInt(cadencia)      : null;
+      const pasosVal = pasosTotales ? parseInt(pasosTotales)  : null;
+      Object.assign(marca, {
+        distanciaKm: distVal, duracionSeg: durVal,
+        ritmoSegKm: ritmoSeg, calApp: calAppNum || null,
+        cadencia: cadVal, pasosTotales: pasosVal,
+      });
+
+      const mejorDistAnt  = hist.filter(h=>h.distanciaKm!=null).reduce((m,h)=>Math.max(m??-Infinity, h.distanciaKm), null);
+      const mejorRitmoAnt = hist.filter(h=>h.ritmoSegKm!=null).reduce((m,h)=>Math.min(m??Infinity,   h.ritmoSegKm),  null);
+
+      const prDist  = distVal  != null && vpEsRecordPersonal(distVal,  mejorDistAnt,  "mayor");
+      const prRitmo = ritmoSeg != null && distNum >= 3 && vpEsRecordPersonal(ritmoSeg, mejorRitmoAnt, "menor");
+
+      esPR = prDist || prRitmo || forzarLogro;
+      marca.esPR = esPR;
+      if (prDist)       tipoTrofeo = "distancia";
+      else if (prRitmo) tipoTrofeo = "ritmo";
+
+      detalleLogro = [
+        distVal    ? `${distVal.toFixed(2)} km`      : null,
+        duracion   ? duracion                         : null,
+        ritmoSeg   ? `Ritmo: ${ritmoFmt}`             : null,
+        calAjustadas ? `${calAjustadas} kcal`         : null,
+      ].filter(Boolean).join(" · ");
+
+    } else {
+      const sogaDurSeg  = vpDuracionASegundos(sogaDuracion);
+      const saltosVal   = saltos ? parseInt(saltos) : null;
+      Object.assign(marca, { duracionSeg: sogaDurSeg, saltos: saltosVal, calApp: calAppNum || null });
+
+      const mejorSaltosAnt = hist.filter(h=>h.saltos!=null).reduce((m,h)=>Math.max(m??-Infinity, h.saltos),      null);
+      const mejorDurAnt    = hist.filter(h=>h.duracionSeg!=null).reduce((m,h)=>Math.max(m??-Infinity, h.duracionSeg), null);
+
+      const prSaltos = saltosVal  != null && vpEsRecordPersonal(saltosVal,  mejorSaltosAnt, "mayor");
+      const prDur    = sogaDurSeg != null && vpEsRecordPersonal(sogaDurSeg, mejorDurAnt,    "mayor");
+
+      esPR = prSaltos || prDur || forzarLogro;
+      marca.esPR = esPR;
+      if (prSaltos)   tipoTrofeo = "saltos";
+      else if (prDur) tipoTrofeo = "tiempo";
+
+      detalleLogro = [
+        saltosVal    ? `${saltosVal.toLocaleString()} saltos` : null,
+        sogaDuracion ? sogaDuracion                           : null,
+        calAjustadas ? `${calAjustadas} kcal`                : null,
+      ].filter(Boolean).join(" · ");
+    }
+
+    hist = [...hist, marca];
+    if (firebaseOk) {
+      try { await setDoc(doc(db, path), { marcas: hist }); } catch(e) {}
+    }
+    setHistorial(hist);
+
+    if (esPR) {
+      const logro = {
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        fecha: Date.now(),
+        ejercicioId:    `cardio_${tipo}`,
+        ejercicioLabel: VP_TIPOS_CARDIO.find(t=>t.id===tipo)?.label || tipo,
+        tipo: tipoTrofeo,
+        detalle: detalleLogro,
+        manual: forzarLogro && tipoTrofeo === "manual",
+      };
+      if (firebaseOk) {
+        try {
+          const snapL = await getDoc(doc(db, vpLogrosPath()));
+          const logrosAct = snapL.exists() ? snapL.data().items || [] : [];
+          await setDoc(doc(db, vpLogrosPath()), { items: [...logrosAct, logro] });
+        } catch(e) {}
+      }
+      onLogroNuevo?.(logro);
+    }
+
+    setUltimoRes({ esPR, detalleLogro, tipoTrofeo });
+    setDistancia(""); setDuracion(""); setCalApp(""); setCadencia(""); setPasosTotales("");
+    setSogaDuracion(""); setSaltos(""); setSogaCal(""); setNota(""); setForzarLogro(false);
+    setGuardando(false);
+    setTimeout(() => setUltimoRes(null), 5000);
+  }
+
+  const ultimasMarcas = [...historial].reverse().slice(0, 5);
+  const C = "#4ABFB5";
+
+  return (
+    <div style={{border:`1px solid ${C}44`,borderRadius:4,padding:"12px",background:`${C}06`,marginBottom:8}}>
+      <div style={{fontSize:9,color:C,letterSpacing:2,marginBottom:8}}>CARDIO</div>
+
+      {/* Selector tipo */}
+      <div style={{display:"flex",gap:6,marginBottom:10}}>
+        {VP_TIPOS_CARDIO.map(t=>(
+          <button key={t.id} onClick={()=>setTipo(t.id)}
+            style={{flex:1,padding:"8px",fontSize:12,borderRadius:3,cursor:"pointer",
+              fontFamily:"system-ui,sans-serif",
+              border:`1px solid ${tipo===t.id?C:G.border}`,
+              background:tipo===t.id?`${C}18`:G.surf2,
+              color:tipo===t.id?C:G.textSec,
+              fontWeight:tipo===t.id?600:400}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tipo === "correr" ? (
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>DISTANCIA (km)</div>
+              <input value={distancia} onChange={e=>setDistancia(e.target.value)}
+                placeholder="12.5" inputMode="decimal" style={{...S.inp(false),textAlign:"center"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>DURACIÓN (MM:SS · H:MM:SS)</div>
+              <input value={duracion} onChange={e=>setDuracion(e.target.value)}
+                placeholder="58:30" style={{...S.inp(false),textAlign:"center"}}/>
+            </div>
+          </div>
+
+          {/* Ritmo calculado automático */}
+          {ritmoSeg && distNum > 0 && (
+            <div style={{textAlign:"center",padding:"7px",marginBottom:6,
+              background:`${C}18`,border:`1px solid ${C}44`,borderRadius:3}}>
+              <span style={{fontSize:10,color:G.textDim}}>Ritmo medio · </span>
+              <span style={{fontSize:15,fontWeight:700,color:C}}>{ritmoFmt}</span>
+              {distNum < 3 && (
+                <span style={{fontSize:9,color:G.textDim,marginLeft:6}}>(PR ritmo solo ≥ 3 km)</span>
+              )}
+            </div>
+          )}
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>CALORÍAS (app)</div>
+              <input value={calApp} onChange={e=>setCalApp(e.target.value)}
+                placeholder="520" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>CADENCIA MEDIA (p/m)</div>
+              <input value={cadencia} onChange={e=>setCadencia(e.target.value)}
+                placeholder="162" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
+            </div>
+          </div>
+          <div style={{marginBottom:6}}>
+            <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>PASOS TOTALES</div>
+            <input value={pasosTotales} onChange={e=>setPasosTotales(e.target.value)}
+              placeholder="9800" inputMode="numeric" style={{...S.inp(false)}}/>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>DURACIÓN (MM:SS)</div>
+              <input value={sogaDuracion} onChange={e=>setSogaDuracion(e.target.value)}
+                placeholder="15:00" style={{...S.inp(false),textAlign:"center"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>SALTOS TOTALES</div>
+              <input value={saltos} onChange={e=>setSaltos(e.target.value)}
+                placeholder="1500" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
+            </div>
+          </div>
+          <div style={{marginBottom:6}}>
+            <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>CALORÍAS (app)</div>
+            <input value={sogaCal} onChange={e=>setSogaCal(e.target.value)}
+              placeholder="180" inputMode="numeric" style={{...S.inp(false)}}/>
+          </div>
+        </>
+      )}
+
+      {/* Peso corporal + chaleco */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+        <div>
+          <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>PESO CORPORAL (kg)</div>
+          <input value={peso} onChange={e=>setPeso(e.target.value)}
+            placeholder="86.5" inputMode="decimal" style={{...S.inp(false),textAlign:"center"}}/>
+        </div>
+        <div>
+          <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>CHALECO / EXTRA (kg)</div>
+          <input value={chaleco} onChange={e=>setChaleco(e.target.value)}
+            placeholder="0" inputMode="decimal" style={{...S.inp(false),textAlign:"center"}}/>
+        </div>
+      </div>
+
+      {/* Calorías ajustadas — solo si chaleco > 0 */}
+      {chalecoNum > 0 && calAppNum > 0 && (
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"6px 10px",marginBottom:6,background:"#1a140a",
+          border:`1px solid ${G.gold}44`,borderRadius:3}}>
+          <span style={{fontSize:10,color:G.textDim}}>
+            Kcal ajustadas ({pesoNum}+{chalecoNum} kg)
+          </span>
+          <span style={{fontSize:13,fontWeight:700,color:G.gold}}>{calAjustadas} kcal</span>
+        </div>
+      )}
+
+      <input value={nota} onChange={e=>setNota(e.target.value)}
+        placeholder="Nota (RPE, terreno, clima...)"
+        style={{...S.inp(false),marginBottom:8,fontSize:12}}/>
+
+      {/* Logro manual */}
+      <div onClick={()=>setForzarLogro(v=>!v)}
+        style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",marginBottom:8,
+          border:`1px solid ${forzarLogro?G.gold:G.border}`,borderRadius:3,cursor:"pointer",
+          background:forzarLogro?G.goldDim:G.surf2}}>
+        <div style={{width:16,height:16,borderRadius:2,flexShrink:0,
+          display:"flex",alignItems:"center",justifyContent:"center",
+          fontSize:10,border:`1.5px solid ${forzarLogro?G.gold:G.textDim}`,
+          background:forzarLogro?G.gold:"transparent",color:G.bg,fontWeight:700}}>
+          {forzarLogro && "✓"}
+        </div>
+        <span style={{fontSize:11,color:forzarLogro?G.gold:G.textSec,fontFamily:"system-ui,sans-serif"}}>
+          ⭐ Marcar como logro manual
+        </span>
+      </div>
+
+      <button onClick={registrar} disabled={guardando}
+        style={{width:"100%",padding:"10px",borderRadius:3,background:C,border:"none",
+          color:"#000",fontSize:12,fontWeight:700,letterSpacing:1,
+          cursor:guardando?"default":"pointer",opacity:guardando?.6:1,
+          fontFamily:"system-ui,sans-serif"}}>
+        {guardando ? "GUARDANDO…" : "REGISTRAR SESIÓN"}
+      </button>
+
+      {/* Feedback post-registro */}
+      {ultimoRes && (
+        <div style={{marginTop:8,padding:"10px",borderRadius:3,textAlign:"center",
+          border:`1px solid ${ultimoRes.esPR ? (VP_TROFEOS[ultimoRes.tipoTrofeo]?.color||G.gold) : G.border}`,
+          background:ultimoRes.esPR ? `${VP_TROFEOS[ultimoRes.tipoTrofeo]?.color||G.gold}18` : G.surf2}}>
+          <div style={{fontSize:14,marginBottom:4}}>
+            {ultimoRes.esPR
+              ? `${VP_TROFEOS[ultimoRes.tipoTrofeo]?.emoji||"🏆"} ¡NUEVO PR!`
+              : "✓ Sesión registrada"}
+          </div>
+          {ultimoRes.detalleLogro && (
+            <div style={{fontSize:11,color:G.textSec}}>{ultimoRes.detalleLogro}</div>
+          )}
+        </div>
+      )}
+
+      {/* Últimas 5 sesiones */}
+      {(historial.length > 0 || loadingHist) && (
+        <div style={{marginTop:12}}>
+          <div style={{fontSize:9,color:G.textDim,letterSpacing:2,marginBottom:6}}>ÚLTIMAS SESIONES</div>
+          {loadingHist
+            ? <div style={{fontSize:10,color:G.textDim,textAlign:"center",padding:8}}>cargando...</div>
+            : ultimasMarcas.map(m => {
+                const esCorrida = m.tipo === "correr";
+                const fechaFmt  = new Date(m.fecha).toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit"});
+                return (
+                  <div key={m.id} style={{display:"flex",gap:8,alignItems:"center",
+                    padding:"7px 8px",marginBottom:4,borderRadius:3,
+                    border:`1px solid ${m.esPR ? C+"66" : G.border}`,
+                    background:m.esPR ? `${C}0d` : G.surf2}}>
+                    <span style={{fontSize:9,color:G.textDim,minWidth:30,flexShrink:0}}>{fechaFmt}</span>
+                    <div style={{flex:1,fontSize:11,lineHeight:1.4}}>
+                      {esCorrida ? (
+                        <>
+                          {m.distanciaKm != null && <strong style={{color:C}}>{m.distanciaKm.toFixed(2)} km </strong>}
+                          {m.ritmoSegKm  != null && <span style={{color:G.textSec}}>{vpSegundosARitmo(m.ritmoSegKm)} </span>}
+                          {m.calAjustadas!= null && <span style={{color:G.textDim}}>{m.calAjustadas} kcal</span>}
+                        </>
+                      ) : (
+                        <>
+                          {m.saltos      != null && <strong style={{color:"#C97AC9"}}>{m.saltos.toLocaleString()} saltos </strong>}
+                          {m.duracionSeg != null && <span style={{color:G.textSec}}>{Math.floor(m.duracionSeg/60)}'{String(m.duracionSeg%60).padStart(2,"0")}'' </span>}
+                          {m.calAjustadas!= null && <span style={{color:G.textDim}}>{m.calAjustadas} kcal</span>}
+                        </>
+                      )}
+                    </div>
+                    {m.esPR && (
+                      <span style={{fontSize:12,flexShrink:0}}>
+                        {VP_TROFEOS[m.tipoTrofeo]?.emoji || "🏆"}
+                      </span>
+                    )}
+                  </div>
+                );
+              })
+          }
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // PANTALLA DE LOGROS — Trofeos, hitos con fecha/hora, ramas por categoría
 // ═══════════════════════════════════════════════════════════════════════════════
 function VpLogrosScreen({ onBack }) {
@@ -4455,6 +4843,9 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
                 <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>FUERZA — RUTINA</div>
                 <VpRegistroEjercicio baseEjercicios={VP_EJERCICIOS_FUERZA} />
               </div>
+
+              {/* ── CARDIO ──────────────────────────────────────────────── */}
+              <VpRegistroCardio pesoDefault={parseFloat(peso) || 86.5} />
             </>
           )}
 
