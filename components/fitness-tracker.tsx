@@ -718,18 +718,18 @@ function vpTiempoASegundos(str) {
   return isNaN(n) ? null : n;
 }
 
-// Soporta "MM:SS" y "H:MM:SS" — para cardio donde la duración puede superar 1h
+// Soporta "MM:SS" y "H:MM:SS" — duraciones de cardio > 1h
 function vpDuracionASegundos(str) {
   if (!str) return null;
-  const hms = str.match(/^(\d+):(\d{1,2}):(\d{2})$/); // H:MM:SS
+  const hms = str.match(/^(\d+):(\d{1,2}):(\d{2})$/);
   if (hms) return parseInt(hms[1])*3600 + parseInt(hms[2])*60 + parseInt(hms[3]);
-  const ms = str.match(/^(\d+):(\d{2})$/);             // MM:SS
+  const ms = str.match(/^(\d+):(\d{2})$/);
   if (ms)  return parseInt(ms[1])*60 + parseInt(ms[2]);
   const n = parseFloat(str);
   return isNaN(n) ? null : n;
 }
 
-// Formatea segundos/km → "M'SS''/km"
+// Formatea seg/km → "M'SS''/km"
 function vpSegundosARitmo(segPorKm) {
   if (!segPorKm || segPorKm <= 0 || !isFinite(segPorKm)) return "—";
   const m = Math.floor(segPorKm / 60);
@@ -737,10 +737,9 @@ function vpSegundosARitmo(segPorKm) {
   return `${m}'${s}''/km`;
 }
 
-// Path Firestore para cardio (misma familia que vpEjercicioPath)
-function vpCardioPath(tipoId) {
-  return `vida_personal/_ejercicios/historial/cardio_${tipoId}`;
-}
+// Paths Firestore para cardio y registros WearJoy
+function vpCardioPath(tipoId)  { return `vida_personal/_ejercicios/historial/cardio_${tipoId}`; }
+function vpWearjoyPath(tipoId) { return `vida_personal/_webjoy/sesiones/${tipoId}`; }
 
 // Compara marca nueva vs mejor histórica y determina si es PR
 // tipoMejor: "mayor" (peso/reps/rondas, más es mejor) o "menor" (tiempo, menos es mejor)
@@ -4022,51 +4021,224 @@ function VpRegistroEjercicio({ baseEjercicios, onLogroNuevo }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CARDIO — Correr libre + Salto de soga, PRs automáticos, historial
+// WEARBODY IMPORT — Parseo de imagen WearJoy con Claude Vision
+// Tipos soportados: correr | soga | crossfit_wod | fuerza
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Campos que extrae WearJoy según tipo de actividad
+const WJ_CAMPOS = {
+  correr: [
+    "distanciaKm","duracion","ritmoPromedio","ritmoMaximo","frecuenciaCardiacaPromedio",
+    "caloriasApp","cadenciaPromedio","pasosTotales","longitudZancadaPromedio","altitudMax","altitudMin",
+    "tiempoZonaCalentamiento","tiempoZonaQuemaGrasa","tiempoZonaResistenciaAerobica","tiempoZonaResistenciaAnaerobica",
+  ],
+  soga: [
+    "duracion","saltosTotales","caloriasApp","frecuenciaCardiacaPromedio",
+  ],
+  crossfit_wod: [
+    "duracion","caloriasApp","frecuenciaCardiacaPromedio","frecuenciaCardiacaMax",
+    "efecto_aerobico","efecto_anaerobico","tiempoRecuperacion",
+  ],
+  fuerza: [
+    "duracion","caloriasApp","frecuenciaCardiacaPromedio","frecuenciaCardiacaMax",
+    "efecto_aerobico","efecto_anaerobico","tiempoRecuperacion",
+  ],
+};
+
+// Prompt por tipo para la IA
+function wjPrompt(tipo) {
+  const campos = WJ_CAMPOS[tipo] || WJ_CAMPOS.correr;
+  const ejemplos = {
+    correr: `{"distanciaKm":6.27,"duracion":"00:47:24","ritmoPromedio":"7'33''","ritmoMaximo":"6'10''","frecuenciaCardiacaPromedio":149,"caloriasApp":563.79,"cadenciaPromedio":154,"pasosTotales":7343,"longitudZancadaPromedio":92,"altitudMax":378,"altitudMin":0,"tiempoZonaCalentamiento":"00:00:52","tiempoZonaQuemaGrasa":"02:06:47","tiempoZonaResistenciaAerobica":"02:20:44","tiempoZonaResistenciaAnaerobica":"02:16:57"}`,
+    soga:   `{"duracion":"00:15:00","saltosTotales":1500,"caloriasApp":180,"frecuenciaCardiacaPromedio":145}`,
+    crossfit_wod: `{"duracion":"00:45:00","caloriasApp":480,"frecuenciaCardiacaPromedio":155,"frecuenciaCardiacaMax":178,"efecto_aerobico":3.0,"efecto_anaerobico":0.8,"tiempoRecuperacion":"20.5 horas"}`,
+    fuerza: `{"duracion":"01:00:00","caloriasApp":350,"frecuenciaCardiacaPromedio":130,"frecuenciaCardiacaMax":165,"efecto_aerobico":1.5,"efecto_anaerobico":1.2,"tiempoRecuperacion":"24 horas"}`,
+  };
+  return `Sos un extractor de datos de la app WearJoy. Analizá esta imagen de resumen de entrenamiento y extraé EXACTAMENTE los campos visibles. Respondé SOLO con JSON válido, sin texto extra ni backticks. Campos a extraer: ${campos.join(", ")}. Ejemplo de formato esperado: ${ejemplos[tipo]||ejemplos.correr}. Si un campo no está visible, omitilo del JSON. Usá null para campos presentes pero ilegibles.`;
+}
+
+function VpWearjoyImport({ tipo, onDatosExtraidos }) {
+  const [estado, setEstado]   = useState("idle"); // idle | procesando | ok | error
+  const [preview, setPreview] = useState(null);
+  const [datos,   setDatos]   = useState(null);
+  const [msgError, setMsgError] = useState("");
+  const fileRef = useRef(null);
+
+  async function procesarImagen(file) {
+    if (!file) return;
+    setEstado("procesando"); setMsgError(""); setDatos(null);
+
+    // Preview local
+    const objUrl = URL.createObjectURL(file);
+    setPreview(objUrl);
+
+    try {
+      const base64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload  = () => res(r.result.split(",")[1]);
+        r.onerror = () => rej(new Error("No se pudo leer el archivo"));
+        r.readAsDataURL(file);
+      });
+
+      const mediaType = file.type.startsWith("image/") ? file.type : "image/jpeg";
+
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1000,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
+              { type: "text",  text: wjPrompt(tipo) },
+            ],
+          }],
+        }),
+      });
+
+      const data  = await resp.json();
+      const texto = (data.content || []).map(c => c.text || "").join("").trim();
+      const clean = texto.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(clean);
+
+      setDatos(parsed);
+      setEstado("ok");
+      onDatosExtraidos?.(parsed);
+    } catch(e) {
+      setEstado("error");
+      setMsgError("No se pudo leer la imagen. Intentá con mejor resolución.");
+    } finally {
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  const C = "#4ABFB5";
+
+  return (
+    <div style={{marginBottom:8}}>
+      <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}}
+        onChange={e => procesarImagen(e.target.files?.[0])} />
+
+      <button onClick={() => fileRef.current?.click()} disabled={estado==="procesando"}
+        style={{width:"100%",padding:"9px",borderRadius:3,border:`1px dashed ${C}88`,
+          background:`${C}0d`,color:C,fontSize:11,cursor:estado==="procesando"?"default":"pointer",
+          fontWeight:600,letterSpacing:.5,fontFamily:"system-ui,sans-serif",
+          opacity:estado==="procesando"?.7:1}}>
+        {estado==="procesando" ? "⏳ ANALIZANDO CON IA…" : "📸 IMPORTAR DESDE WEARBODY"}
+      </button>
+
+      {estado==="ok" && datos && (
+        <div style={{marginTop:6,padding:"8px 10px",background:`${C}12`,border:`1px solid ${C}44`,
+          borderRadius:3,fontSize:10,color:C}}>
+          ✓ Datos extraídos — {Object.keys(datos).filter(k=>datos[k]!=null).length} campos detectados
+        </div>
+      )}
+      {estado==="error" && (
+        <div style={{marginTop:6,padding:"8px 10px",background:"#2a1010",border:"1px solid #8A3A2A55",
+          borderRadius:3,fontSize:10,color:"#C9724C"}}>
+          ✗ {msgError}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REGISTRO CARDIO — Correr + Soga, con import WearJoy y PRs automáticos
 // ═══════════════════════════════════════════════════════════════════════════════
 function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
-  const [tipo,          setTipo]          = useState("correr");
+  const [tipo,           setTipo]           = useState("correr");
   // correr
-  const [distancia,     setDistancia]     = useState("");
-  const [duracion,      setDuracion]      = useState("");
-  const [calApp,        setCalApp]        = useState("");
-  const [cadencia,      setCadencia]      = useState("");
-  const [pasosTotales,  setPasosTotales]  = useState("");
+  const [distancia,      setDistancia]      = useState("");
+  const [duracion,       setDuracion]       = useState("");
+  const [calApp,         setCalApp]         = useState("");
+  const [ritmoPromedio,  setRitmoPromedio]  = useState(""); // "M'SS''" o "MM:SS" — solo display/guardado
+  const [ritmoMaximo,    setRitmoMaximo]    = useState("");
+  const [cadencia,       setCadencia]       = useState("");
+  const [pasosTotales,   setPasosTotales]   = useState("");
+  const [longitudZancada,setLongitudZancada]= useState("");
+  const [fcPromedio,     setFcPromedio]     = useState("");
+  const [fcMax,          setFcMax]          = useState("");
+  // zonas FC (correr)
+  const [zonaCalentamiento,  setZonaCalentamiento]  = useState("");
+  const [zonaQuemaGrasa,     setZonaQuemaGrasa]     = useState("");
+  const [zonaAerobica,       setZonaAerobica]       = useState("");
+  const [zonaAnaerobica,     setZonaAnaerobica]     = useState("");
   // soga
-  const [sogaDuracion,  setSogaDuracion]  = useState("");
-  const [saltos,        setSaltos]        = useState("");
-  const [sogaCal,       setSogaCal]       = useState("");
+  const [sogaDuracion,   setSogaDuracion]   = useState("");
+  const [saltos,         setSaltos]         = useState("");
+  const [sogaCal,        setSogaCal]        = useState("");
+  const [sogaFcPromedio, setSogaFcPromedio] = useState("");
   // comunes
-  const [peso,          setPeso]          = useState(String(pesoDefault));
-  const [chaleco,       setChaleco]       = useState("0");
-  const [nota,          setNota]          = useState("");
-  const [forzarLogro,   setForzarLogro]   = useState(false);
-  const [guardando,     setGuardando]     = useState(false);
-  const [ultimoRes,     setUltimoRes]     = useState(null);
-  const [historial,     setHistorial]     = useState([]);
-  const [loadingHist,   setLoadingHist]   = useState(true);
+  const [peso,           setPeso]           = useState(String(pesoDefault));
+  const [chaleco,        setChaleco]        = useState("0");
+  const [nota,           setNota]           = useState("");
+  const [forzarLogro,    setForzarLogro]    = useState(false);
+  const [guardando,      setGuardando]      = useState(false);
+  const [ultimoRes,      setUltimoRes]      = useState(null);
+  const [historial,      setHistorial]      = useState([]);
+  const [loadingHist,    setLoadingHist]    = useState(true);
+  const [mostrarZonas,   setMostrarZonas]   = useState(false);
 
-  // Cargar historial al montar y al cambiar tipo
   useEffect(() => {
     setHistorial([]); setLoadingHist(true);
     if (!firebaseOk) { setLoadingHist(false); return; }
     getDoc(doc(db, vpCardioPath(tipo)))
-      .then(snap => { setHistorial(snap.exists() ? snap.data().marcas || [] : []); })
+      .then(snap => setHistorial(snap.exists() ? snap.data().marcas || [] : []))
       .catch(() => {})
       .finally(() => setLoadingHist(false));
   }, [tipo]);
 
-  // Cálculos derivados (correr)
+  // Relleno automático cuando WearJoy devuelve datos
+  function aplicarDatosWJ(d) {
+    if (!d) return;
+    if (tipo === "correr") {
+      if (d.distanciaKm     != null) setDistancia(String(d.distanciaKm));
+      if (d.duracion)                setDuracion(d.duracion.replace(/^00:/,""));
+      if (d.caloriasApp     != null) setCalApp(String(d.caloriasApp));
+      if (d.ritmoPromedio)           setRitmoPromedio(d.ritmoPromedio);
+      if (d.ritmoMaximo)             setRitmoMaximo(d.ritmoMaximo);
+      if (d.cadenciaPromedio!= null) setCadencia(String(d.cadenciaPromedio));
+      if (d.pasosTotales    != null) setPasosTotales(String(d.pasosTotales));
+      if (d.longitudZancadaPromedio != null) setLongitudZancada(String(d.longitudZancadaPromedio));
+      if (d.frecuenciaCardiacaPromedio != null) setFcPromedio(String(d.frecuenciaCardiacaPromedio));
+      if (d.tiempoZonaCalentamiento)       setZonaCalentamiento(d.tiempoZonaCalentamiento);
+      if (d.tiempoZonaQuemaGrasa)          setZonaQuemaGrasa(d.tiempoZonaQuemaGrasa);
+      if (d.tiempoZonaResistenciaAerobica) setZonaAerobica(d.tiempoZonaResistenciaAerobica);
+      if (d.tiempoZonaResistenciaAnaerobica) setZonaAnaerobica(d.tiempoZonaResistenciaAnaerobica);
+    } else {
+      if (d.duracion)             setSogaDuracion(d.duracion.replace(/^00:/,""));
+      if (d.saltosTotales != null)setSaltos(String(d.saltosTotales));
+      if (d.caloriasApp   != null)setSogaCal(String(d.caloriasApp));
+      if (d.frecuenciaCardiacaPromedio != null) setSogaFcPromedio(String(d.frecuenciaCardiacaPromedio));
+    }
+    setMostrarZonas(true);
+  }
+
+  // Cálculos derivados
   const durSeg     = vpDuracionASegundos(duracion);
-  const distNum    = parseFloat(distancia.replace(",", ".")) || 0;
-  const ritmoSeg   = (durSeg && distNum >= 0.01) ? durSeg / distNum : null;
-  const ritmoFmt   = vpSegundosARitmo(ritmoSeg);
+  const distNum    = parseFloat(String(distancia).replace(",", ".")) || 0;
+  // Ritmo: si el usuario importó de WearJoy usamos ese, si no calculamos
+  const ritmoSegCalc = (durSeg && distNum >= 0.01) ? durSeg / distNum : null;
+  // Para PRs usamos siempre el seg/km calculado (más preciso)
+  const ritmoSegPR   = ritmoSegCalc;
+  const ritmoDisplay = ritmoPromedio || vpSegundosARitmo(ritmoSegCalc);
+
   const pesoNum    = parseFloat(String(peso).replace(",", "."))    || pesoDefault;
   const chalecoNum = parseFloat(String(chaleco).replace(",", ".")) || 0;
   const calAppNum  = parseFloat(String(tipo === "soga" ? sogaCal : calApp).replace(",", ".")) || 0;
   const calAjustadas = (chalecoNum > 0 && pesoNum > 0 && calAppNum > 0)
     ? Math.round(calAppNum * (pesoNum + chalecoNum) / pesoNum)
     : calAppNum > 0 ? Math.round(calAppNum) : null;
+
+  function resetCorrer() {
+    setDistancia(""); setDuracion(""); setCalApp(""); setRitmoPromedio(""); setRitmoMaximo("");
+    setCadencia(""); setPasosTotales(""); setLongitudZancada(""); setFcPromedio(""); setFcMax("");
+    setZonaCalentamiento(""); setZonaQuemaGrasa(""); setZonaAerobica(""); setZonaAnaerobica("");
+  }
+  function resetSoga() { setSogaDuracion(""); setSaltos(""); setSogaCal(""); setSogaFcPromedio(""); }
 
   async function registrar() {
     setGuardando(true);
@@ -4080,34 +4252,35 @@ function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
     let marca = {
       id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       fecha: Date.now(), tipo,
-      nota: nota || null,
-      pesoKg: pesoNum,
-      chalecoKg: chalecoNum || null,
-      calAjustadas,
-      esPR: false,
-      manual: forzarLogro,
+      nota: nota || null, pesoKg: pesoNum,
+      chalecoKg: chalecoNum || null, calAjustadas,
+      esPR: false, manual: forzarLogro,
     };
 
-    let esPR = false;
-    let tipoTrofeo = "manual";
-    let detalleLogro = "";
+    let esPR = false, tipoTrofeo = "manual", detalleLogro = "";
 
     if (tipo === "correr") {
-      const distVal  = distNum > 0 ? distNum : null;
-      const durVal   = durSeg  > 0 ? durSeg  : null;
-      const cadVal   = cadencia     ? parseInt(cadencia)      : null;
-      const pasosVal = pasosTotales ? parseInt(pasosTotales)  : null;
+      const distVal = distNum > 0 ? distNum : null;
+      const durVal  = durSeg  > 0 ? durSeg  : null;
       Object.assign(marca, {
         distanciaKm: distVal, duracionSeg: durVal,
-        ritmoSegKm: ritmoSeg, calApp: calAppNum || null,
-        cadencia: cadVal, pasosTotales: pasosVal,
+        ritmoSegKm: ritmoSegCalc,
+        ritmoPromedio: ritmoPromedio || null,
+        ritmoMaximo:   ritmoMaximo   || null,
+        calApp: calAppNum || null,
+        cadencia:      cadencia      ? parseInt(cadencia)      : null,
+        pasosTotales:  pasosTotales  ? parseInt(pasosTotales)  : null,
+        longitudZancada: longitudZancada ? parseInt(longitudZancada) : null,
+        fcPromedio:    fcPromedio    ? parseInt(fcPromedio)    : null,
+        fcMax:         fcMax         ? parseInt(fcMax)         : null,
+        zonas: { calentamiento: zonaCalentamiento||null, quemaGrasa: zonaQuemaGrasa||null,
+                 aerobica: zonaAerobica||null, anaerobica: zonaAnaerobica||null },
       });
 
       const mejorDistAnt  = hist.filter(h=>h.distanciaKm!=null).reduce((m,h)=>Math.max(m??-Infinity, h.distanciaKm), null);
-      const mejorRitmoAnt = hist.filter(h=>h.ritmoSegKm!=null).reduce((m,h)=>Math.min(m??Infinity,   h.ritmoSegKm),  null);
-
-      const prDist  = distVal  != null && vpEsRecordPersonal(distVal,  mejorDistAnt,  "mayor");
-      const prRitmo = ritmoSeg != null && distNum >= 3 && vpEsRecordPersonal(ritmoSeg, mejorRitmoAnt, "menor");
+      const mejorRitmoAnt = hist.filter(h=>h.ritmoSegKm!=null).reduce((m,h)=>Math.min(m??Infinity, h.ritmoSegKm), null);
+      const prDist  = distVal    != null && vpEsRecordPersonal(distVal,    mejorDistAnt,  "mayor");
+      const prRitmo = ritmoSegPR != null && distNum >= 3 && vpEsRecordPersonal(ritmoSegPR, mejorRitmoAnt, "menor");
 
       esPR = prDist || prRitmo || forzarLogro;
       marca.esPR = esPR;
@@ -4115,20 +4288,24 @@ function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
       else if (prRitmo) tipoTrofeo = "ritmo";
 
       detalleLogro = [
-        distVal    ? `${distVal.toFixed(2)} km`      : null,
-        duracion   ? duracion                         : null,
-        ritmoSeg   ? `Ritmo: ${ritmoFmt}`             : null,
-        calAjustadas ? `${calAjustadas} kcal`         : null,
+        distVal           ? `${distVal.toFixed(2)} km`    : null,
+        duracion          ? duracion                       : null,
+        ritmoDisplay !== "—" ? `Ritmo: ${ritmoDisplay}`   : null,
+        calAjustadas      ? `${calAjustadas} kcal`        : null,
+        fcPromedio        ? `FC: ${fcPromedio} bpm`       : null,
       ].filter(Boolean).join(" · ");
 
     } else {
-      const sogaDurSeg  = vpDuracionASegundos(sogaDuracion);
-      const saltosVal   = saltos ? parseInt(saltos) : null;
-      Object.assign(marca, { duracionSeg: sogaDurSeg, saltos: saltosVal, calApp: calAppNum || null });
+      const sogaDurSeg = vpDuracionASegundos(sogaDuracion);
+      const saltosVal  = saltos ? parseInt(saltos) : null;
+      Object.assign(marca, {
+        duracionSeg: sogaDurSeg, saltos: saltosVal,
+        calApp: calAppNum || null,
+        fcPromedio: sogaFcPromedio ? parseInt(sogaFcPromedio) : null,
+      });
 
-      const mejorSaltosAnt = hist.filter(h=>h.saltos!=null).reduce((m,h)=>Math.max(m??-Infinity, h.saltos),      null);
+      const mejorSaltosAnt = hist.filter(h=>h.saltos!=null).reduce((m,h)=>Math.max(m??-Infinity, h.saltos), null);
       const mejorDurAnt    = hist.filter(h=>h.duracionSeg!=null).reduce((m,h)=>Math.max(m??-Infinity, h.duracionSeg), null);
-
       const prSaltos = saltosVal  != null && vpEsRecordPersonal(saltosVal,  mejorSaltosAnt, "mayor");
       const prDur    = sogaDurSeg != null && vpEsRecordPersonal(sogaDurSeg, mejorDurAnt,    "mayor");
 
@@ -4146,7 +4323,7 @@ function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
 
     hist = [...hist, marca];
     if (firebaseOk) {
-      try { await setDoc(doc(db, path), { marcas: hist }); } catch(e) {}
+      try { await setDoc(doc(db, vpCardioPath(tipo)), { marcas: hist }); } catch(e) {}
     }
     setHistorial(hist);
 
@@ -4156,8 +4333,7 @@ function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
         fecha: Date.now(),
         ejercicioId:    `cardio_${tipo}`,
         ejercicioLabel: VP_TIPOS_CARDIO.find(t=>t.id===tipo)?.label || tipo,
-        tipo: tipoTrofeo,
-        detalle: detalleLogro,
+        tipo: tipoTrofeo, detalle: detalleLogro,
         manual: forzarLogro && tipoTrofeo === "manual",
       };
       if (firebaseOk) {
@@ -4171,8 +4347,7 @@ function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
     }
 
     setUltimoRes({ esPR, detalleLogro, tipoTrofeo });
-    setDistancia(""); setDuracion(""); setCalApp(""); setCadencia(""); setPasosTotales("");
-    setSogaDuracion(""); setSaltos(""); setSogaCal(""); setNota(""); setForzarLogro(false);
+    resetCorrer(); resetSoga(); setNota(""); setForzarLogro(false);
     setGuardando(false);
     setTimeout(() => setUltimoRes(null), 5000);
   }
@@ -4182,7 +4357,9 @@ function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
 
   return (
     <div style={{border:`1px solid ${C}44`,borderRadius:4,padding:"12px",background:`${C}06`,marginBottom:8}}>
-      <div style={{fontSize:9,color:C,letterSpacing:2,marginBottom:8}}>CARDIO</div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <div style={{fontSize:9,color:C,letterSpacing:2}}>CARDIO</div>
+      </div>
 
       {/* Selector tipo */}
       <div style={{display:"flex",gap:6,marginBottom:10}}>
@@ -4192,63 +4369,115 @@ function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
               fontFamily:"system-ui,sans-serif",
               border:`1px solid ${tipo===t.id?C:G.border}`,
               background:tipo===t.id?`${C}18`:G.surf2,
-              color:tipo===t.id?C:G.textSec,
-              fontWeight:tipo===t.id?600:400}}>
+              color:tipo===t.id?C:G.textSec,fontWeight:tipo===t.id?600:400}}>
             {t.label}
           </button>
         ))}
       </div>
 
+      {/* Import WearJoy */}
+      <VpWearjoyImport tipo={tipo} onDatosExtraidos={aplicarDatosWJ} />
+
       {tipo === "correr" ? (
         <>
+          {/* Distancia + Duración */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
             <div>
               <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>DISTANCIA (km)</div>
               <input value={distancia} onChange={e=>setDistancia(e.target.value)}
-                placeholder="12.5" inputMode="decimal" style={{...S.inp(false),textAlign:"center"}}/>
+                placeholder="6.27" inputMode="decimal" style={{...S.inp(false),textAlign:"center"}}/>
             </div>
             <div>
-              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>DURACIÓN (MM:SS · H:MM:SS)</div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>DURACIÓN</div>
               <input value={duracion} onChange={e=>setDuracion(e.target.value)}
-                placeholder="58:30" style={{...S.inp(false),textAlign:"center"}}/>
+                placeholder="47:24" style={{...S.inp(false),textAlign:"center"}}/>
             </div>
           </div>
 
-          {/* Ritmo calculado automático */}
-          {ritmoSeg && distNum > 0 && (
-            <div style={{textAlign:"center",padding:"7px",marginBottom:6,
-              background:`${C}18`,border:`1px solid ${C}44`,borderRadius:3}}>
-              <span style={{fontSize:10,color:G.textDim}}>Ritmo medio · </span>
-              <span style={{fontSize:15,fontWeight:700,color:C}}>{ritmoFmt}</span>
-              {distNum < 3 && (
-                <span style={{fontSize:9,color:G.textDim,marginLeft:6}}>(PR ritmo solo ≥ 3 km)</span>
+          {/* Ritmo — display calculado o importado */}
+          {(ritmoDisplay !== "—" || ritmoPromedio) && (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+              <div style={{padding:"7px",background:`${C}18`,border:`1px solid ${C}44`,borderRadius:3,textAlign:"center"}}>
+                <div style={{fontSize:8,color:G.textDim,marginBottom:2}}>RITMO PROMEDIO</div>
+                <div style={{fontSize:15,fontWeight:700,color:C}}>{ritmoDisplay}</div>
+                {distNum > 0 && distNum < 3 && <div style={{fontSize:8,color:G.textDim,marginTop:2}}>PR solo ≥ 3km</div>}
+              </div>
+              {ritmoMaximo && (
+                <div style={{padding:"7px",background:"#1a1a1a",border:`1px solid ${G.border}`,borderRadius:3,textAlign:"center"}}>
+                  <div style={{fontSize:8,color:G.textDim,marginBottom:2}}>RITMO MÁXIMO</div>
+                  <div style={{fontSize:15,fontWeight:700,color:G.textSec}}>{ritmoMaximo}</div>
+                </div>
               )}
             </div>
           )}
 
+          {/* Calorías + FC */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
             <div>
               <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>CALORÍAS (app)</div>
               <input value={calApp} onChange={e=>setCalApp(e.target.value)}
-                placeholder="520" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
+                placeholder="563" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
             </div>
             <div>
-              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>CADENCIA MEDIA (p/m)</div>
-              <input value={cadencia} onChange={e=>setCadencia(e.target.value)}
-                placeholder="162" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>FC PROMEDIO (bpm)</div>
+              <input value={fcPromedio} onChange={e=>setFcPromedio(e.target.value)}
+                placeholder="149" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
             </div>
           </div>
-          <div style={{marginBottom:6}}>
-            <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>PASOS TOTALES</div>
-            <input value={pasosTotales} onChange={e=>setPasosTotales(e.target.value)}
-              placeholder="9800" inputMode="numeric" style={{...S.inp(false)}}/>
+
+          {/* Cadencia + Pasos + Zancada */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:6}}>
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>CADENCIA (p/m)</div>
+              <input value={cadencia} onChange={e=>setCadencia(e.target.value)}
+                placeholder="154" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>PASOS</div>
+              <input value={pasosTotales} onChange={e=>setPasosTotales(e.target.value)}
+                placeholder="7343" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>ZANCADA (cm)</div>
+              <input value={longitudZancada} onChange={e=>setLongitudZancada(e.target.value)}
+                placeholder="92" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
+            </div>
           </div>
+
+          {/* Zonas FC — colapsables */}
+          {(zonaCalentamiento||zonaQuemaGrasa||zonaAerobica||zonaAnaerobica) && (
+            <div style={{marginBottom:6}}>
+              <div onClick={()=>setMostrarZonas(v=>!v)}
+                style={{fontSize:9,color:G.textDim,letterSpacing:1,marginBottom:mostrarZonas?6:0,
+                  cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span>❤️ ZONAS DE FRECUENCIA CARDÍACA</span>
+                <span style={{fontSize:10}}>{mostrarZonas?"▲":"▼"}</span>
+              </div>
+              {mostrarZonas && (
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
+                  {[
+                    ["🔵 Calentamiento", zonaCalentamiento, setZonaCalentamiento],
+                    ["🟢 Quema de grasa", zonaQuemaGrasa,   setZonaQuemaGrasa],
+                    ["🟡 Resist. aeróbica", zonaAerobica,   setZonaAerobica],
+                    ["🔴 Resist. anaeróbica",zonaAnaerobica,setZonaAnaerobica],
+                  ].map(([lbl,val,setter])=>(
+                    <div key={lbl}>
+                      <div style={{fontSize:8,color:G.textDim,marginBottom:2}}>{lbl}</div>
+                      <input value={val} onChange={e=>setter(e.target.value)} placeholder="00:00:00"
+                        style={{...S.inp(false),fontSize:11,textAlign:"center"}}/>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </>
       ) : (
+        /* SOGA */
         <>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
             <div>
-              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>DURACIÓN (MM:SS)</div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>DURACIÓN</div>
               <input value={sogaDuracion} onChange={e=>setSogaDuracion(e.target.value)}
                 placeholder="15:00" style={{...S.inp(false),textAlign:"center"}}/>
             </div>
@@ -4258,15 +4487,22 @@ function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
                 placeholder="1500" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
             </div>
           </div>
-          <div style={{marginBottom:6}}>
-            <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>CALORÍAS (app)</div>
-            <input value={sogaCal} onChange={e=>setSogaCal(e.target.value)}
-              placeholder="180" inputMode="numeric" style={{...S.inp(false)}}/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>CALORÍAS (app)</div>
+              <input value={sogaCal} onChange={e=>setSogaCal(e.target.value)}
+                placeholder="180" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>FC PROMEDIO (bpm)</div>
+              <input value={sogaFcPromedio} onChange={e=>setSogaFcPromedio(e.target.value)}
+                placeholder="145" inputMode="numeric" style={{...S.inp(false),textAlign:"center"}}/>
+            </div>
           </div>
         </>
       )}
 
-      {/* Peso corporal + chaleco */}
+      {/* Peso + Chaleco */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
         <div>
           <div style={{fontSize:9,color:G.textDim,marginBottom:3}}>PESO CORPORAL (kg)</div>
@@ -4280,14 +4516,12 @@ function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
         </div>
       </div>
 
-      {/* Calorías ajustadas — solo si chaleco > 0 */}
+      {/* Calorías ajustadas por chaleco */}
       {chalecoNum > 0 && calAppNum > 0 && (
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
           padding:"6px 10px",marginBottom:6,background:"#1a140a",
           border:`1px solid ${G.gold}44`,borderRadius:3}}>
-          <span style={{fontSize:10,color:G.textDim}}>
-            Kcal ajustadas ({pesoNum}+{chalecoNum} kg)
-          </span>
+          <span style={{fontSize:10,color:G.textDim}}>Kcal ajustadas ({pesoNum}+{chalecoNum} kg)</span>
           <span style={{fontSize:13,fontWeight:700,color:G.gold}}>{calAjustadas} kcal</span>
         </div>
       )}
@@ -4320,23 +4554,18 @@ function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
         {guardando ? "GUARDANDO…" : "REGISTRAR SESIÓN"}
       </button>
 
-      {/* Feedback post-registro */}
       {ultimoRes && (
         <div style={{marginTop:8,padding:"10px",borderRadius:3,textAlign:"center",
-          border:`1px solid ${ultimoRes.esPR ? (VP_TROFEOS[ultimoRes.tipoTrofeo]?.color||G.gold) : G.border}`,
-          background:ultimoRes.esPR ? `${VP_TROFEOS[ultimoRes.tipoTrofeo]?.color||G.gold}18` : G.surf2}}>
+          border:`1px solid ${ultimoRes.esPR?(VP_TROFEOS[ultimoRes.tipoTrofeo]?.color||G.gold):G.border}`,
+          background:ultimoRes.esPR?`${VP_TROFEOS[ultimoRes.tipoTrofeo]?.color||G.gold}18`:G.surf2}}>
           <div style={{fontSize:14,marginBottom:4}}>
-            {ultimoRes.esPR
-              ? `${VP_TROFEOS[ultimoRes.tipoTrofeo]?.emoji||"🏆"} ¡NUEVO PR!`
-              : "✓ Sesión registrada"}
+            {ultimoRes.esPR ? `${VP_TROFEOS[ultimoRes.tipoTrofeo]?.emoji||"🏆"} ¡NUEVO PR!` : "✓ Sesión registrada"}
           </div>
-          {ultimoRes.detalleLogro && (
-            <div style={{fontSize:11,color:G.textSec}}>{ultimoRes.detalleLogro}</div>
-          )}
+          {ultimoRes.detalleLogro && <div style={{fontSize:11,color:G.textSec}}>{ultimoRes.detalleLogro}</div>}
         </div>
       )}
 
-      {/* Últimas 5 sesiones */}
+      {/* Historial — últimas 5 */}
       {(historial.length > 0 || loadingHist) && (
         <div style={{marginTop:12}}>
           <div style={{fontSize:9,color:G.textDim,letterSpacing:2,marginBottom:6}}>ÚLTIMAS SESIONES</div>
@@ -4346,35 +4575,143 @@ function VpRegistroCardio({ onLogroNuevo, pesoDefault = 86.5 }) {
                 const esCorrida = m.tipo === "correr";
                 const fechaFmt  = new Date(m.fecha).toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit"});
                 return (
-                  <div key={m.id} style={{display:"flex",gap:8,alignItems:"center",
-                    padding:"7px 8px",marginBottom:4,borderRadius:3,
-                    border:`1px solid ${m.esPR ? C+"66" : G.border}`,
-                    background:m.esPR ? `${C}0d` : G.surf2}}>
+                  <div key={m.id}
+                    style={{display:"flex",gap:8,alignItems:"center",padding:"7px 8px",marginBottom:4,
+                      borderRadius:3,border:`1px solid ${m.esPR?C+"66":G.border}`,
+                      background:m.esPR?`${C}0d`:G.surf2}}>
                     <span style={{fontSize:9,color:G.textDim,minWidth:30,flexShrink:0}}>{fechaFmt}</span>
-                    <div style={{flex:1,fontSize:11,lineHeight:1.4}}>
+                    <div style={{flex:1,fontSize:11,lineHeight:1.5}}>
                       {esCorrida ? (
                         <>
-                          {m.distanciaKm != null && <strong style={{color:C}}>{m.distanciaKm.toFixed(2)} km </strong>}
-                          {m.ritmoSegKm  != null && <span style={{color:G.textSec}}>{vpSegundosARitmo(m.ritmoSegKm)} </span>}
-                          {m.calAjustadas!= null && <span style={{color:G.textDim}}>{m.calAjustadas} kcal</span>}
+                          {m.distanciaKm  != null && <strong style={{color:C}}>{m.distanciaKm.toFixed(2)} km </strong>}
+                          {m.ritmoSegKm   != null && <span style={{color:G.textSec}}>{vpSegundosARitmo(m.ritmoSegKm)} </span>}
+                          {m.fcPromedio   != null && <span style={{color:"#C9724C"}}>FC:{m.fcPromedio} </span>}
+                          {m.calAjustadas != null && <span style={{color:G.textDim}}>{m.calAjustadas}kcal</span>}
                         </>
                       ) : (
                         <>
-                          {m.saltos      != null && <strong style={{color:"#C97AC9"}}>{m.saltos.toLocaleString()} saltos </strong>}
-                          {m.duracionSeg != null && <span style={{color:G.textSec}}>{Math.floor(m.duracionSeg/60)}'{String(m.duracionSeg%60).padStart(2,"0")}'' </span>}
-                          {m.calAjustadas!= null && <span style={{color:G.textDim}}>{m.calAjustadas} kcal</span>}
+                          {m.saltos       != null && <strong style={{color:"#C97AC9"}}>{m.saltos.toLocaleString()} saltos </strong>}
+                          {m.duracionSeg  != null && <span style={{color:G.textSec}}>{Math.floor(m.duracionSeg/60)}'{String(m.duracionSeg%60).padStart(2,"0")}'' </span>}
+                          {m.calAjustadas != null && <span style={{color:G.textDim}}>{m.calAjustadas}kcal</span>}
                         </>
                       )}
                     </div>
-                    {m.esPR && (
-                      <span style={{fontSize:12,flexShrink:0}}>
-                        {VP_TROFEOS[m.tipoTrofeo]?.emoji || "🏆"}
-                      </span>
-                    )}
+                    {m.esPR && <span style={{fontSize:12,flexShrink:0}}>{VP_TROFEOS[m.tipoTrofeo]?.emoji||"🏆"}</span>}
                   </div>
                 );
               })
           }
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WEARBODY IMPORT — Para CrossFit WOD y Fuerza (solo métricas de la sesión)
+// Preserva el registro manual de ejercicios; agrega kcal y datos de la app
+// ═══════════════════════════════════════════════════════════════════════════════
+function VpWearjoyEntrenamiento({ tipo, onDatosAplicados }) {
+  // tipo: "crossfit_wod" | "fuerza"
+  const [estado,   setEstado]   = useState("idle");
+  const [datos,    setDatos]    = useState(null);
+  const [guardado, setGuardado] = useState(false);
+  const fileRef = useRef(null);
+
+  async function procesarImagen(file) {
+    if (!file) return;
+    setEstado("procesando"); setDatos(null); setGuardado(false);
+    try {
+      const base64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload  = () => res(r.result.split(",")[1]);
+        r.onerror = () => rej(new Error("error"));
+        r.readAsDataURL(file);
+      });
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6", max_tokens: 800,
+          messages: [{ role:"user", content:[
+            { type:"image", source:{ type:"base64", media_type: file.type||"image/jpeg", data: base64 }},
+            { type:"text",  text: wjPrompt(tipo) },
+          ]}],
+        }),
+      });
+      const data  = await resp.json();
+      const texto = (data.content||[]).map(c=>c.text||"").join("").trim();
+      const parsed = JSON.parse(texto.replace(/```json|```/g,"").trim());
+      setDatos(parsed);
+      setEstado("ok");
+    } catch(e) { setEstado("error"); }
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  async function guardar() {
+    if (!datos || !firebaseOk) { onDatosAplicados?.(datos); setGuardado(true); return; }
+    try {
+      const path = vpWearjoyPath(tipo);
+      const snap = await getDoc(doc(db, path));
+      const prev = snap.exists() ? snap.data().sesiones || [] : [];
+      const entrada = { ...datos, id:`${Date.now()}`, fecha: Date.now(), tipo };
+      await setDoc(doc(db, path), { sesiones: [...prev, entrada] });
+    } catch(e) {}
+    onDatosAplicados?.(datos);
+    setGuardado(true);
+  }
+
+  const C = tipo === "crossfit_wod" ? "#A07AC9" : "#7AB85A";
+  const label = tipo === "crossfit_wod" ? "WOD" : "FUERZA";
+
+  return (
+    <div style={{marginBottom:8}}>
+      <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}}
+        onChange={e=>procesarImagen(e.target.files?.[0])} />
+
+      <button onClick={()=>fileRef.current?.click()} disabled={estado==="procesando"}
+        style={{width:"100%",padding:"8px",borderRadius:3,border:`1px dashed ${C}88`,
+          background:`${C}0d`,color:C,fontSize:11,cursor:estado==="procesando"?"default":"pointer",
+          fontWeight:600,letterSpacing:.5,fontFamily:"system-ui,sans-serif"}}>
+        {estado==="procesando" ? "⏳ ANALIZANDO…" : `📸 IMPORTAR ${label} DESDE WEARBODY`}
+      </button>
+
+      {estado==="ok" && datos && !guardado && (
+        <div style={{marginTop:6,padding:"10px",background:`${C}0d`,border:`1px solid ${C}44`,borderRadius:3}}>
+          <div style={{fontSize:9,color:C,letterSpacing:1,marginBottom:6}}>DATOS DETECTADOS — {label}</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,marginBottom:8}}>
+            {[
+              ["Duración",  datos.duracion],
+              ["Calorías",  datos.caloriasApp ? `${datos.caloriasApp} kcal` : null],
+              ["FC prom.",  datos.frecuenciaCardiacaPromedio ? `${datos.frecuenciaCardiacaPromedio} bpm` : null],
+              ["FC máx.",   datos.frecuenciaCardiacaMax      ? `${datos.frecuenciaCardiacaMax} bpm`      : null],
+              ["Ef. aerob.",datos.efecto_aerobico   ? `${datos.efecto_aerobico}`   : null],
+              ["Ef. anaer.",datos.efecto_anaerobico ? `${datos.efecto_anaerobico}` : null],
+              ["Recuperac.",datos.tiempoRecuperacion],
+            ].filter(([,v])=>v!=null).map(([lbl,val])=>(
+              <div key={lbl} style={{background:G.surf2,borderRadius:3,padding:"5px 7px"}}>
+                <div style={{fontSize:8,color:G.textDim,marginBottom:2}}>{lbl}</div>
+                <div style={{fontSize:11,fontWeight:600,color:G.text}}>{val}</div>
+              </div>
+            ))}
+          </div>
+          <button onClick={guardar}
+            style={{width:"100%",padding:"8px",borderRadius:3,background:C,border:"none",
+              color:"#000",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"system-ui,sans-serif"}}>
+            GUARDAR DATOS DE SESIÓN
+          </button>
+        </div>
+      )}
+      {guardado && (
+        <div style={{marginTop:6,padding:"7px",background:`${C}12`,border:`1px solid ${C}44`,
+          borderRadius:3,fontSize:10,color:C,textAlign:"center"}}>
+          ✓ Datos de sesión guardados
+        </div>
+      )}
+      {estado==="error" && (
+        <div style={{marginTop:6,padding:"7px",background:"#2a1010",border:"1px solid #8A3A2A55",
+          borderRadius:3,fontSize:10,color:"#C9724C"}}>
+          ✗ No se pudo leer la imagen. Intentá con mejor resolución.
         </div>
       )}
     </div>
@@ -4837,14 +5174,21 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
                   style={{...S.inp(false),height:52,resize:"none",fontFamily:"system-ui,sans-serif"}}/>
               </div>
 
-              <VpRegistroEjercicio baseEjercicios={VP_EJERCICIOS_CROSSFIT} />
+              {/* ── CrossFit WOD: import WearJoy (kcal/FC/efecto) + registro manual ejercicios ── */}
+              <div style={{border:`1px solid #A07AC944`,borderRadius:4,padding:"12px",background:"#0a001a",marginBottom:8}}>
+                <div style={{fontSize:9,color:"#A07AC9",letterSpacing:2,marginBottom:8}}>WOD — CROSSFIT</div>
+                <VpWearjoyEntrenamiento tipo="crossfit_wod" />
+                <VpRegistroEjercicio baseEjercicios={VP_EJERCICIOS_CROSSFIT} />
+              </div>
 
-              <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
-                <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>FUERZA — RUTINA</div>
+              {/* ── Fuerza: import WearJoy (kcal/FC/efecto) + registro manual ejercicios ── */}
+              <div style={{border:`1px solid #7AB85A44`,borderRadius:4,padding:"12px",background:"#001a0f",marginBottom:8}}>
+                <div style={{fontSize:9,color:"#7AB85A",letterSpacing:2,marginBottom:8}}>FUERZA — RUTINA</div>
+                <VpWearjoyEntrenamiento tipo="fuerza" />
                 <VpRegistroEjercicio baseEjercicios={VP_EJERCICIOS_FUERZA} />
               </div>
 
-              {/* ── CARDIO ──────────────────────────────────────────────── */}
+              {/* ── Cardio: correr + soga con import WearJoy y PRs ── */}
               <VpRegistroCardio pesoDefault={parseFloat(peso) || 86.5} />
             </>
           )}
