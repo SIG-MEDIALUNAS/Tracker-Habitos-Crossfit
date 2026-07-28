@@ -4082,7 +4082,7 @@ function VpWearjoyImport({ tipo, onDatosExtraidos }) {
 
       const mediaType = file.type.startsWith("image/") ? file.type : "image/jpeg";
 
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      const resp = await fetch("/api/wearbody-import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4099,6 +4099,7 @@ function VpWearjoyImport({ tipo, onDatosExtraidos }) {
       });
 
       const data  = await resp.json();
+      if (data.error) throw new Error(data.error.message || data.error);
       const texto = (data.content || []).map(c => c.text || "").join("").trim();
       const clean = texto.replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(clean);
@@ -4628,7 +4629,7 @@ function VpWearjoyEntrenamiento({ tipo, onDatosAplicados }) {
         r.onerror = () => rej(new Error("error"));
         r.readAsDataURL(file);
       });
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      const resp = await fetch("/api/wearbody-import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4640,6 +4641,7 @@ function VpWearjoyEntrenamiento({ tipo, onDatosAplicados }) {
         }),
       });
       const data  = await resp.json();
+      if (data.error) throw new Error(data.error.message || data.error);
       const texto = (data.content||[]).map(c=>c.text||"").join("").trim();
       const parsed = JSON.parse(texto.replace(/```json|```/g,"").trim());
       setDatos(parsed);
