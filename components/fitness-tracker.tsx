@@ -681,6 +681,18 @@ const VP_EJERCICIOS_FUERZA = [
   { id:"zancadas",         label:"Zancadas (Lunges)",          unidad:"kg" },
 ];
 
+// Movimientos de barra/olímpicos que también aparecen en rutinas de EMOM/weightlifting
+// (viven en VP_EJERCICIOS_CROSSFIT para no duplicar el historial de PRs, pero se
+// muestran también acá para poder registrarlos desde la sección FUERZA — RUTINA)
+const VP_EJERCICIOS_FUERZA_EXT = [
+  ...VP_EJERCICIOS_FUERZA,
+  ...VP_EJERCICIOS_CROSSFIT.filter(e =>
+    ["clean","power_clean","clean_jerk","snatch","power_snatch","thruster","front_squat",
+     "overhead_squat","push_press","push_jerk","sumo_deadlift_hp","kb_swing","wall_ball","gtoh"]
+    .includes(e.id)
+  ),
+];
+
 // Tipos de cardio libre — diferenciados de CrossFit (WOD) y Fuerza (rutina fija)
 const VP_TIPOS_CARDIO = [
   { id:"correr", label:"🏃 Correr libre" },
@@ -2301,7 +2313,7 @@ function VpRecetaForm({ recetaInicial, onGuardar, onCancelar }) {
         ? { type:"document", source:{ type:"base64", media_type:mediaType, data:base64 } }
         : { type:"image", source:{ type:"base64", media_type:mediaType, data:base64 } };
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("/api/wearbody-import", {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
@@ -3291,7 +3303,7 @@ function VpTablaNutricional({ onBack }) {
         ? { type:"document", source:{ type:"base64", media_type:mediaType, data:base64 } }
         : { type:"image", source:{ type:"base64", media_type:mediaType, data:base64 } };
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("/api/wearbody-import", {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
@@ -3845,8 +3857,10 @@ function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros }) 
 // ═══════════════════════════════════════════════════════════════════════════════
 // REGISTRO DE EJERCICIO — carga marca, detecta PR automático, permite marcar manual
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpRegistroEjercicio({ baseEjercicios, onLogroNuevo }) {
-  const [ejercicioId, setEjercicioId] = useState(baseEjercicios[0]?.id || "");
+function VpRegistroEjercicio({ baseEjercicios, onLogroNuevo, ejercicioIdControlado, onEjercicioIdChange }) {
+  const [ejercicioIdInterno, setEjercicioIdInterno] = useState(baseEjercicios[0]?.id || "");
+  const ejercicioId    = ejercicioIdControlado ?? ejercicioIdInterno;
+  const setEjercicioId = onEjercicioIdChange   ?? setEjercicioIdInterno;
   const [reps, setReps]     = useState("");
   const [kg, setKg]         = useState("");
   const [rondas, setRondas] = useState("");
@@ -3855,8 +3869,21 @@ function VpRegistroEjercicio({ baseEjercicios, onLogroNuevo }) {
   const [forzarLogro, setForzarLogro] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [ultimoResultado, setUltimoResultado] = useState(null); // {esPR, trofeo}
+  // Peso por ronda/serie — opcional, para EMOMs o WODs donde el peso cambia entre rondas
+  const [series, setSeries] = useState([]); // [{ id, ronda, peso }]
 
   const ejercicio = baseEjercicios.find(e => e.id === ejercicioId);
+
+  function agregarSerie() {
+    setSeries(s => [...s, { id:`${Date.now()}_${Math.random().toString(36).slice(2,5)}`,
+      ronda:String(s.length+1), peso:"" }]);
+  }
+  function actualizarSerie(id, patch) {
+    setSeries(s => s.map(x => x.id===id ? {...x, ...patch} : x));
+  }
+  function quitarSerie(id) {
+    setSeries(s => s.filter(x => x.id!==id));
+  }
 
   async function registrar() {
     if (!ejercicio) return;
@@ -3874,7 +3901,15 @@ function VpRegistroEjercicio({ baseEjercicios, onLogroNuevo }) {
     // Determinar valor relevante según unidad del ejercicio
     const esTiempo = ejercicio.unidad === "tiempo";
     const esAmrap  = ejercicio.unidad === "amrap";
-    const valorPeso   = kg ? parseFloat(kg.replace(",",".")) : null;
+    const seriesValidas = series
+      .map(s => ({ ronda: s.ronda, peso: s.peso ? parseFloat(String(s.peso).replace(",",".")) : null }))
+      .filter(s => s.peso != null && !isNaN(s.peso));
+    const pesoMaxSeries = seriesValidas.length
+      ? Math.max(...seriesValidas.map(s => s.peso)) : null;
+    const kgManual = kg ? parseFloat(kg.replace(",",".")) : null;
+    const valorPeso   = pesoMaxSeries != null
+      ? Math.max(pesoMaxSeries, kgManual ?? -Infinity)
+      : kgManual;
     const valorReps   = reps ? parseInt(reps) : null;
     const valorRondas = rondas ? parseInt(rondas) : null;
     const valorTiempoSeg = vpTiempoASegundos(tiempo);
@@ -3897,6 +3932,7 @@ function VpRegistroEjercicio({ baseEjercicios, onLogroNuevo }) {
       fecha: Date.now(),
       kg: valorPeso, reps: valorReps, rondas: valorRondas,
       tiempo: tiempo || null, tiempoSeg: valorTiempoSeg,
+      series: seriesValidas.length ? seriesValidas : null,
       nota: notaLibre || null, esPR, manual: forzarLogro,
     };
 
@@ -3940,6 +3976,7 @@ function VpRegistroEjercicio({ baseEjercicios, onLogroNuevo }) {
 
     setUltimoResultado({ esPR, ejercicio: ejercicio.label });
     setReps(""); setKg(""); setRondas(""); setTiempo(""); setNotaLibre(""); setForzarLogro(false);
+    setSeries([]);
     setGuardando(false);
     setTimeout(()=>setUltimoResultado(null), 4000);
   }
@@ -3974,6 +4011,30 @@ function VpRegistroEjercicio({ baseEjercicios, onLogroNuevo }) {
           <input value={tiempo} onChange={e=>setTiempo(e.target.value)} placeholder="8:42"
             style={{...S.inp(false),textAlign:"center"}}/>
         </div>
+      </div>
+
+      {/* Peso por ronda/serie — para EMOMs o WODs donde el peso varía */}
+      <div style={{marginBottom:8}}>
+        {series.map(s=>(
+          <div key={s.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:4}}>
+            <span style={{fontSize:9,color:G.gold,width:34,flexShrink:0}}>R{s.ronda}</span>
+            <input value={s.peso} onChange={e=>actualizarSerie(s.id,{peso:e.target.value})}
+              placeholder="kg" inputMode="decimal"
+              style={{...S.inp(false),textAlign:"center",flex:1}}/>
+            <button onClick={()=>quitarSerie(s.id)}
+              style={{background:"transparent",border:"none",color:G.textDim,cursor:"pointer",fontSize:13,padding:"0 4px"}}>✕</button>
+          </div>
+        ))}
+        <button onClick={agregarSerie}
+          style={{width:"100%",padding:"6px",borderRadius:3,border:`1px dashed ${G.border}`,
+            background:"transparent",color:G.gold,fontSize:10,cursor:"pointer",letterSpacing:.5}}>
+          + peso por ronda/serie
+        </button>
+        {series.length>0 && (
+          <div style={{fontSize:9,color:G.textDim,marginTop:4}}>
+            El campo KG de arriba se actualiza solo con el máximo cargado acá (podés sobreescribirlo).
+          </div>
+        )}
       </div>
 
       <input value={notaLibre} onChange={e=>setNotaLibre(e.target.value)}
@@ -4721,6 +4782,134 @@ function VpWearjoyEntrenamiento({ tipo, onDatosAplicados }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// IMPORTAR RUTINA DESDE FOTO — Lee la pizarra del box y separa FUERZA (EMOM/
+// weightlifting) de WOD (metcon/AMRAP), matcheando contra la base de ejercicios
+// ═══════════════════════════════════════════════════════════════════════════════
+const PROMPT_RUTINA_PIZARRA = `Esta es una foto de la pizarra de un box de Crossfit en Argentina.
+Separá el contenido en dos bloques:
+- "fuerza": la parte de levantamiento/weightlifting (ej. EMOM, series de fuerza pura), cada movimiento tal cual aparece escrito.
+- "wod": la parte de metcon/WOD/AMRAP (todo lo que no sea la parte de fuerza), cada movimiento tal cual aparece escrito.
+Ignorá encabezados, nombres de personas, tablas de máximos y textos motivacionales.
+Respondé SOLO JSON válido, sin texto adicional, con este formato exacto:
+{"fuerza": ["movimiento 1", "movimiento 2"], "wod": ["movimiento 1", "movimiento 2"]}`;
+
+function vpNormalizar(t) {
+  return (t||"").toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .replace(/[^a-z0-9 ]/g," ");
+}
+
+function vpMatchEjercicio(texto, lista) {
+  const norm = vpNormalizar(texto);
+  let mejor = null, mejorScore = 0;
+  for (const ej of lista) {
+    const palabrasLabel = vpNormalizar(ej.label).split(" ").filter(Boolean);
+    let score = 0;
+    for (const p of palabrasLabel) if (p.length>2 && norm.includes(p)) score++;
+    if (score > mejorScore) { mejorScore = score; mejor = ej; }
+  }
+  return mejorScore > 0 ? mejor : null;
+}
+
+function VpImportarRutinaFoto({ onSeleccionarFuerza, onSeleccionarWod }) {
+  const [estado, setEstado] = useState("idle");
+  const [resultado, setResultado] = useState(null); // {fuerza:[{texto,match}], wod:[{texto,match}]}
+  const fileRef = useRef(null);
+
+  async function procesar(file) {
+    if (!file) return;
+    setEstado("procesando"); setResultado(null);
+    try {
+      const base64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload  = () => res(r.result.split(",")[1]);
+        r.onerror = () => rej(new Error("error"));
+        r.readAsDataURL(file);
+      });
+      const resp = await fetch("/api/wearbody-import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6", max_tokens: 600,
+          messages: [{ role:"user", content:[
+            { type:"image", source:{ type:"base64", media_type: file.type||"image/jpeg", data: base64 }},
+            { type:"text",  text: PROMPT_RUTINA_PIZARRA },
+          ]}],
+        }),
+      });
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error.message || data.error);
+      const texto  = (data.content||[]).map(c=>c.text||"").join("").trim();
+      const parsed = JSON.parse(texto.replace(/```json|```/g,"").trim());
+
+      setResultado({
+        fuerza: (parsed.fuerza||[]).map(t => ({ texto:t, match: vpMatchEjercicio(t, VP_EJERCICIOS_FUERZA_EXT) })),
+        wod:    (parsed.wod   ||[]).map(t => ({ texto:t, match: vpMatchEjercicio(t, VP_EJERCICIOS_CROSSFIT)  })),
+      });
+      setEstado("ok");
+    } catch(e) { setEstado("error"); }
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  return (
+    <div style={{border:`1px solid ${G.goldMid||G.gold}44`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
+      <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:8}}>📷 IMPORTAR RUTINA DESDE FOTO (PIZARRA)</div>
+
+      <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}}
+        onChange={e=>procesar(e.target.files?.[0])} />
+      <button onClick={()=>fileRef.current?.click()} disabled={estado==="procesando"}
+        style={{width:"100%",padding:"9px",borderRadius:3,border:`1px dashed ${G.gold}`,
+          background:"transparent",color:G.gold,fontSize:11,fontWeight:600,letterSpacing:.5,
+          cursor:estado==="procesando"?"default":"pointer",fontFamily:"system-ui,sans-serif"}}>
+        {estado==="procesando" ? "⏳ LEYENDO PIZARRA…" : "SUBIR FOTO DE LA PIZARRA"}
+      </button>
+
+      {estado==="error" && (
+        <div style={{marginTop:6,padding:"7px",background:"#2a1010",border:"1px solid #8A3A2A55",
+          borderRadius:3,fontSize:10,color:"#C9724C"}}>
+          ✗ No se pudo leer la pizarra. Cargá los movimientos a mano abajo.
+        </div>
+      )}
+
+      {resultado && (
+        <div style={{marginTop:8}}>
+          {["fuerza","wod"].map(seccion => resultado[seccion].length>0 && (
+            <div key={seccion} style={{marginBottom:8}}>
+              <div style={{fontSize:8,color:G.textDim,letterSpacing:1,marginBottom:4}}>
+                {seccion==="fuerza" ? "DETECTADO EN FUERZA (EMOM)" : "DETECTADO EN WOD"}
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                {resultado[seccion].map((r,i)=>(
+                  <button key={i}
+                    disabled={!r.match}
+                    onClick={()=>{
+                      if (!r.match) return;
+                      if (seccion==="fuerza") onSeleccionarFuerza?.(r.match.id);
+                      else onSeleccionarWod?.(r.match.id);
+                    }}
+                    title={r.match ? `Seleccionar "${r.match.label}"` : "No se encontró un ejercicio equivalente — cargalo a mano"}
+                    style={{padding:"5px 9px",borderRadius:12,fontSize:10,
+                      border:`1px solid ${r.match?G.gold:G.border}`,
+                      background:r.match?G.goldDim:G.surf2,
+                      color:r.match?G.gold:G.textDim,
+                      cursor:r.match?"pointer":"default",
+                      fontFamily:"system-ui,sans-serif"}}>
+                    {r.texto}{r.match?"":" (sin match)"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div style={{fontSize:9,color:G.textDim}}>
+            Tocá un movimiento para seleccionarlo abajo y cargar el peso por ronda.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // PANTALLA DE LOGROS — Trofeos, hitos con fecha/hora, ramas por categoría
 // ═══════════════════════════════════════════════════════════════════════════════
 function VpLogrosScreen({ onBack }) {
@@ -4989,6 +5178,8 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
   const [peso,     setPeso]     = useState(datos?.peso || "");
   const [cintura,  setCintura]  = useState(datos?.cintura || "");
   const [wod,      setWod]      = useState(datos?.wod || "");
+  const [ejercicioIdWod,    setEjercicioIdWod]    = useState(VP_EJERCICIOS_CROSSFIT[0]?.id || "");
+  const [ejercicioIdFuerza, setEjercicioIdFuerza] = useState(VP_EJERCICIOS_FUERZA_EXT[0]?.id || "");
   // nutrición extras — tuppers reales comidos HOY (no plantilla, vienen de Cocina)
   const [tuppersConsumidos, setTuppersConsumidos] = useState(datos?.tuppersConsumidos || []);
   // trading extras
@@ -5176,18 +5367,28 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
                   style={{...S.inp(false),height:52,resize:"none",fontFamily:"system-ui,sans-serif"}}/>
               </div>
 
-              {/* ── CrossFit WOD: import WearJoy (kcal/FC/efecto) + registro manual ejercicios ── */}
-              <div style={{border:`1px solid #A07AC944`,borderRadius:4,padding:"12px",background:"#0a001a",marginBottom:8}}>
-                <div style={{fontSize:9,color:"#A07AC9",letterSpacing:2,marginBottom:8}}>WOD — CROSSFIT</div>
-                <VpWearjoyEntrenamiento tipo="crossfit_wod" />
-                <VpRegistroEjercicio baseEjercicios={VP_EJERCICIOS_CROSSFIT} />
-              </div>
+              {/* ── Importar rutina desde foto de la pizarra — alimenta ambos bloques ── */}
+              <VpImportarRutinaFoto
+                onSeleccionarFuerza={setEjercicioIdFuerza}
+                onSeleccionarWod={setEjercicioIdWod}
+              />
 
-              {/* ── Fuerza: import WearJoy (kcal/FC/efecto) + registro manual ejercicios ── */}
+              {/* ── Fuerza (EMOM/weightlifting): rutina + peso por ronda arriba, WearJoy abajo ── */}
               <div style={{border:`1px solid #7AB85A44`,borderRadius:4,padding:"12px",background:"#001a0f",marginBottom:8}}>
                 <div style={{fontSize:9,color:"#7AB85A",letterSpacing:2,marginBottom:8}}>FUERZA — RUTINA</div>
+                <VpRegistroEjercicio baseEjercicios={VP_EJERCICIOS_FUERZA_EXT}
+                  ejercicioIdControlado={ejercicioIdFuerza} onEjercicioIdChange={setEjercicioIdFuerza} />
+                <div style={{fontSize:8,color:G.textDim,letterSpacing:1,margin:"4px 0"}}>DATOS WEARJOY</div>
                 <VpWearjoyEntrenamiento tipo="fuerza" />
-                <VpRegistroEjercicio baseEjercicios={VP_EJERCICIOS_FUERZA} />
+              </div>
+
+              {/* ── WOD (metcon/AMRAP): rutina + peso por ronda arriba, WearJoy abajo ── */}
+              <div style={{border:`1px solid #A07AC944`,borderRadius:4,padding:"12px",background:"#0a001a",marginBottom:8}}>
+                <div style={{fontSize:9,color:"#A07AC9",letterSpacing:2,marginBottom:8}}>WOD — CROSSFIT</div>
+                <VpRegistroEjercicio baseEjercicios={VP_EJERCICIOS_CROSSFIT}
+                  ejercicioIdControlado={ejercicioIdWod} onEjercicioIdChange={setEjercicioIdWod} />
+                <div style={{fontSize:8,color:G.textDim,letterSpacing:1,margin:"4px 0"}}>DATOS WEARJOY</div>
+                <VpWearjoyEntrenamiento tipo="crossfit_wod" />
               </div>
 
               {/* ── Cardio: correr + soga con import WearJoy y PRs ── */}
