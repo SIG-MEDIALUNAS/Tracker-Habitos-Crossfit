@@ -4910,6 +4910,235 @@ function VpImportarRutinaFoto({ onSeleccionarFuerza, onSeleccionarWod }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// HISTORIAL DE FITNESS — Sesiones WearJoy + marcas de ejercicios + cardio
+// ═══════════════════════════════════════════════════════════════════════════════
+function vpFechaLarga(ts) {
+  return new Date(ts).toLocaleDateString("es-AR",
+    { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" });
+}
+
+function VpHistorialFitness({ onBack }) {
+  const [tab, setTab] = useState("wearjoy"); // wearjoy | ejercicios | cardio
+
+  return (
+    <div style={{fontFamily:"system-ui,sans-serif",maxWidth:430,margin:"0 auto",
+      color:G.text,paddingBottom:40,minHeight:"100vh",background:G.bg,padding:"1rem"}}>
+
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+        <button onClick={onBack} style={S.btn(false,false)}>← Volver</button>
+        <div style={{fontSize:13,fontWeight:600,color:G.gold,letterSpacing:1}}>
+          📊 HISTORIAL Y REGISTROS
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:3,marginBottom:12}}>
+        {[["wearjoy","WEARJOY"],["ejercicios","EJERCICIOS"],["cardio","CARDIO"]].map(([id,lbl])=>(
+          <button key={id} onClick={()=>setTab(id)}
+            style={{flex:1,padding:"9px",fontSize:10,letterSpacing:1,borderRadius:3,cursor:"pointer",
+              border:`1px solid ${tab===id?G.gold:G.border}`,
+              background:tab===id?G.goldDim:G.surf2,
+              color:tab===id?G.gold:G.textSec,fontWeight:tab===id?700:400}}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {tab==="wearjoy"   && <VpHistorialWearjoy />}
+      {tab==="ejercicios"&& <VpHistorialEjercicios />}
+      {tab==="cardio"    && <VpHistorialCardio />}
+    </div>
+  );
+}
+
+function VpHistorialWearjoy() {
+  const TIPOS = [
+    { id:"fuerza",       label:"FUERZA",  color:"#7AB85A" },
+    { id:"crossfit_wod", label:"WOD",     color:"#A07AC9" },
+  ];
+  const [datos, setDatos]     = useState({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!firebaseOk) { setLoading(false); return; }
+    Promise.all(TIPOS.map(t =>
+      getDoc(doc(db, vpWearjoyPath(t.id)))
+        .then(s => [t.id, s.exists() ? (s.data().sesiones||[]).slice().reverse() : []])
+        .catch(() => [t.id, []])
+    )).then(pares => { setDatos(Object.fromEntries(pares)); setLoading(false); });
+  }, []);
+
+  if (loading) return <div style={{fontSize:11,color:G.textDim,textAlign:"center",padding:20}}>Cargando…</div>;
+
+  const hayAlgo = TIPOS.some(t => (datos[t.id]||[]).length>0);
+  if (!hayAlgo) return (
+    <div style={{fontSize:11,color:G.textDim,textAlign:"center",padding:20}}>
+      Todavía no guardaste ninguna sesión de WearJoy.
+    </div>
+  );
+
+  return (
+    <div>
+      {TIPOS.map(t => (datos[t.id]||[]).length>0 && (
+        <div key={t.id} style={{marginBottom:14}}>
+          <div style={{fontSize:9,color:t.color,letterSpacing:2,marginBottom:6}}>{t.label}</div>
+          {datos[t.id].map(s => (
+            <div key={s.id} style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"10px",
+              background:G.surf,marginBottom:6}}>
+              <div style={{fontSize:10,color:G.textDim,marginBottom:6}}>{vpFechaLarga(s.fecha)}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
+                {[
+                  ["Duración",   s.duracion],
+                  ["Calorías",   s.caloriasApp!=null ? `${s.caloriasApp} kcal` : null],
+                  ["FC prom.",   s.frecuenciaCardiacaPromedio!=null ? `${s.frecuenciaCardiacaPromedio} bpm` : null],
+                  ["FC máx.",    s.frecuenciaCardiacaMax!=null ? `${s.frecuenciaCardiacaMax} bpm` : null],
+                  ["Ef. aerob.", s.efecto_aerobico!=null ? s.efecto_aerobico : null],
+                  ["Ef. anaer.", s.efecto_anaerobico!=null ? s.efecto_anaerobico : null],
+                ].filter(([,v])=>v!=null).map(([lbl,val])=>(
+                  <div key={lbl}>
+                    <div style={{fontSize:8,color:G.textDim}}>{lbl}</div>
+                    <div style={{fontSize:12,fontWeight:600,color:G.text}}>{val}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function VpHistorialEjercicios() {
+  const TODOS = [...VP_EJERCICIOS_CROSSFIT, ...VP_EJERCICIOS_FUERZA]
+    .filter((e,i,arr) => arr.findIndex(x=>x.id===e.id)===i)
+    .sort((a,b)=>a.label.localeCompare(b.label));
+  const [ejercicioId, setEjercicioId] = useState(TODOS[0]?.id || "");
+  const [marcas, setMarcas]           = useState([]);
+  const [loading, setLoading]         = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    if (!firebaseOk) { setMarcas([]); setLoading(false); return; }
+    getDoc(doc(db, vpEjercicioPath(ejercicioId)))
+      .then(s => setMarcas(s.exists() ? (s.data().marcas||[]).slice().reverse() : []))
+      .catch(() => setMarcas([]))
+      .finally(() => setLoading(false));
+  }, [ejercicioId]);
+
+  const ejercicio = TODOS.find(e=>e.id===ejercicioId);
+
+  return (
+    <div>
+      <select value={ejercicioId} onChange={e=>setEjercicioId(e.target.value)}
+        style={{...S.inp(false),marginBottom:10,cursor:"pointer"}}>
+        {TODOS.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+      </select>
+
+      {loading ? (
+        <div style={{fontSize:11,color:G.textDim,textAlign:"center",padding:20}}>Cargando…</div>
+      ) : marcas.length===0 ? (
+        <div style={{fontSize:11,color:G.textDim,textAlign:"center",padding:20}}>
+          Todavía no hay marcas registradas de {ejercicio?.label}.
+        </div>
+      ) : (
+        marcas.map(m => (
+          <div key={m.id} style={{border:`1px solid ${m.esPR?G.gold:G.border}`,borderRadius:4,
+            padding:"10px",background:m.esPR?G.goldDim:G.surf,marginBottom:6}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+              <span style={{fontSize:10,color:G.textDim}}>{vpFechaLarga(m.fecha)}</span>
+              {m.esPR && <span style={{fontSize:10,color:G.gold,fontWeight:700}}>🏆 PR</span>}
+            </div>
+            <div style={{fontSize:12,color:G.text,marginBottom:m.series?.length?6:0}}>
+              {[
+                m.kg!=null?`${m.kg} kg`:null,
+                m.reps!=null?`${m.reps} reps`:null,
+                m.rondas!=null?`${m.rondas} rondas`:null,
+                m.tiempo?m.tiempo:null,
+              ].filter(Boolean).join(" · ") || "—"}
+            </div>
+            {m.series?.length>0 && (
+              <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                {m.series.map((s,i)=>(
+                  <span key={i} style={{fontSize:9,color:G.textSec,border:`1px solid ${G.border}`,
+                    borderRadius:10,padding:"2px 7px"}}>
+                    R{s.ronda}: {s.peso}kg
+                  </span>
+                ))}
+              </div>
+            )}
+            {m.nota && <div style={{fontSize:10,color:G.textDim,marginTop:4,fontStyle:"italic"}}>{m.nota}</div>}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+function VpHistorialCardio() {
+  const [tipo, setTipo]       = useState(VP_TIPOS_CARDIO[0]?.id || "correr");
+  const [marcas, setMarcas]   = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    if (!firebaseOk) { setMarcas([]); setLoading(false); return; }
+    getDoc(doc(db, vpCardioPath(tipo)))
+      .then(s => setMarcas(s.exists() ? (s.data().marcas||[]).slice().reverse() : []))
+      .catch(() => setMarcas([]))
+      .finally(() => setLoading(false));
+  }, [tipo]);
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:6,marginBottom:10}}>
+        {VP_TIPOS_CARDIO.map(t=>(
+          <button key={t.id} onClick={()=>setTipo(t.id)}
+            style={{flex:1,padding:"8px",fontSize:11,borderRadius:3,cursor:"pointer",
+              border:`1px solid ${tipo===t.id?"#4ABFB5":G.border}`,
+              background:tipo===t.id?"#4ABFB518":G.surf2,
+              color:tipo===t.id?"#4ABFB5":G.textSec,fontWeight:tipo===t.id?600:400}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{fontSize:11,color:G.textDim,textAlign:"center",padding:20}}>Cargando…</div>
+      ) : marcas.length===0 ? (
+        <div style={{fontSize:11,color:G.textDim,textAlign:"center",padding:20}}>
+          Todavía no hay marcas registradas.
+        </div>
+      ) : (
+        marcas.map(m => (
+          <div key={m.id} style={{border:`1px solid ${m.esPR?G.gold:G.border}`,borderRadius:4,
+            padding:"10px",background:m.esPR?G.goldDim:G.surf,marginBottom:6}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+              <span style={{fontSize:10,color:G.textDim}}>{vpFechaLarga(m.fecha)}</span>
+              {m.esPR && <span style={{fontSize:10,color:G.gold,fontWeight:700}}>🏆 PR</span>}
+            </div>
+            <div style={{fontSize:12,color:G.text}}>
+              {tipo==="correr"
+                ? [
+                    m.distanciaKm!=null?`${m.distanciaKm.toFixed(2)} km`:null,
+                    m.ritmoPromedio?`Ritmo: ${m.ritmoPromedio}`:null,
+                    m.calAjustadas?`${m.calAjustadas} kcal`:null,
+                    m.fcPromedio?`FC: ${m.fcPromedio} bpm`:null,
+                  ].filter(Boolean).join(" · ")
+                : [
+                    m.saltos!=null?`${m.saltos.toLocaleString()} saltos`:null,
+                    m.calAjustadas?`${m.calAjustadas} kcal`:null,
+                    m.fcPromedio?`FC: ${m.fcPromedio} bpm`:null,
+                  ].filter(Boolean).join(" · ")}
+            </div>
+            {m.nota && <div style={{fontSize:10,color:G.textDim,marginTop:4,fontStyle:"italic"}}>{m.nota}</div>}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // PANTALLA DE LOGROS — Trofeos, hitos con fecha/hora, ramas por categoría
 // ═══════════════════════════════════════════════════════════════════════════════
 function VpLogrosScreen({ onBack }) {
@@ -5170,7 +5399,7 @@ function VpTuppersReales({ consumidosHoy, onConsumir }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // REGISTRO DIARIO DE UN PILAR
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbrirTablaNutricional, onAbrirCalculadoraObjetivo }) {
+function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbrirTablaNutricional, onAbrirCalculadoraObjetivo, onAbrirHistorialFitness }) {
   const [habitos, setHabitos] = useState(datos?.habitos || {});
   const [nota, setNota]       = useState(datos?.nota || "");
   // fitness extras
@@ -5340,6 +5569,16 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
       {/* ── FITNESS EXTRA ───────────────────────────────────────────────────── */}
       {pilar.esFitness && (
         <>
+          {onAbrirHistorialFitness && (
+            <button onClick={onAbrirHistorialFitness}
+              style={{width:"100%",padding:"10px",borderRadius:4,marginBottom:8,
+                border:`1px solid ${G.gold}`,background:G.goldDim,color:G.gold,
+                fontSize:11,fontWeight:700,letterSpacing:1,cursor:"pointer",
+                fontFamily:"system-ui,sans-serif"}}>
+              📊 VER HISTORIAL Y REGISTROS
+            </button>
+          )}
+
           {/* Tipo de día */}
           <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf,marginBottom:8}}>
             <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:6}}>TIPO DE DÍA</div>
@@ -5492,7 +5731,7 @@ function VpPilarDia({ pilar, datos, onChange, onAbrirCocina, onAbrirStock, onAbr
 // ═══════════════════════════════════════════════════════════════════════════════
 // DÍA COMPLETO — todos los pilares con tabs
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpDayView({ mesId, wIdx, dIdx, pilarInicial, onBack, onAbrirCocina, onAbrirStock, onAbrirTablaNutricional, onAbrirCalculadoraObjetivo }) {
+function VpDayView({ mesId, wIdx, dIdx, pilarInicial, onBack, onAbrirCocina, onAbrirStock, onAbrirTablaNutricional, onAbrirCalculadoraObjetivo, onAbrirHistorialFitness }) {
   const [pilarActivo, setPilarActivo] = useState(pilarInicial || "fe");
   const [datos, setDatos]             = useState({});
   const [loading, setLoading]         = useState(true);
@@ -5590,6 +5829,7 @@ function VpDayView({ mesId, wIdx, dIdx, pilarInicial, onBack, onAbrirCocina, onA
           onAbrirStock={onAbrirStock}
           onAbrirTablaNutricional={onAbrirTablaNutricional}
           onAbrirCalculadoraObjetivo={onAbrirCalculadoraObjetivo}
+          onAbrirHistorialFitness={onAbrirHistorialFitness}
         />
       )}
     </div>
@@ -6069,6 +6309,7 @@ function VpApp() {
   const [mostrarRecetas, setMostrarRecetas] = useState(false);
   const [mostrarTablaNutricional, setMostrarTablaNutricional] = useState(false);
   const [mostrarCalculadoraObjetivo, setMostrarCalculadoraObjetivo] = useState(false);
+  const [mostrarHistorialFitness, setMostrarHistorialFitness] = useState(false);
   const [recetaParaCocinar, setRecetaParaCocinar] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [nav, setNav]     = useState("month"); // month | week | day
@@ -6106,6 +6347,11 @@ function VpApp() {
   // Calculadora de objetivo fijo — crudo total → tuppers variable
   if (mostrarCalculadoraObjetivo) {
     return <VpCalculadoraObjetivo onBack={() => setMostrarCalculadoraObjetivo(false)} />;
+  }
+
+  // Historial de Fitness — sesiones WearJoy + marcas de ejercicios + cardio
+  if (mostrarHistorialFitness) {
+    return <VpHistorialFitness onBack={() => setMostrarHistorialFitness(false)} />;
   }
 
   // Recetas — pantalla independiente, conecta hacia Cocina al elegir "cocinar esta receta"
@@ -6243,6 +6489,7 @@ function VpApp() {
             onAbrirStock={()=>setMostrarStock(true)}
             onAbrirTablaNutricional={()=>setMostrarTablaNutricional(true)}
             onAbrirCalculadoraObjetivo={()=>setMostrarCalculadoraObjetivo(true)}
+            onAbrirHistorialFitness={()=>setMostrarHistorialFitness(true)}
           />
         )}
       </div>
