@@ -1412,6 +1412,8 @@ function VpListaCompras({ onBack, onAbrirStock }) {
   const [semanasHist, setSemanasHist] = useState([]);
   const [mesesHist, setMesesHist] = useState([]);
   const [vistaHistorial, setVistaHistorial] = useState(null); // "semanas" | "meses" | null
+  const [semanaExpandidaId, setSemanaExpandidaId] = useState(null);
+  const [detalleSemanasCache, setDetalleSemanasCache] = useState({}); // sid -> datos completos de la semana
   const [saveStatus, setSaveStatus] = useState("idle");
   const [loading, setLoading] = useState(true);
   // ── UI ───────────────────────────────────────────────────────────────────────
@@ -1514,6 +1516,18 @@ function VpListaCompras({ onBack, onAbrirStock }) {
     }
     const snaps = await Promise.all(mids.map(mid => getDoc(doc(db, vpComprasMesPath(mid)))));
     setMesesHist(snaps.filter(s=>s.exists()).map(s=>s.data()));
+  }
+
+  // Expande/colapsa el detalle día-por-día de una semana dentro del historial mensual
+  async function toggleDetalleSemana(sid) {
+    if (semanaExpandidaId === sid) { setSemanaExpandidaId(null); return; }
+    setSemanaExpandidaId(sid);
+    if (!detalleSemanasCache[sid] && firebaseOk) {
+      try {
+        const snap = await getDoc(doc(db, vpComprasSemanaPath(sid)));
+        if (snap.exists()) setDetalleSemanasCache(c => ({ ...c, [sid]: snap.data() }));
+      } catch(e) {}
+    }
   }
 
   // ── Sumar al Stock ────────────────────────────────────────────────────────────
@@ -1665,13 +1679,52 @@ function VpListaCompras({ onBack, onAbrirStock }) {
                 </div>
                 <div style={{fontSize:18,fontWeight:700,color:G.gold}}>${fmt(mes.total||0)}</div>
               </div>
-              {semanas.map(sem => (
-                <div key={sem.sid} style={{display:"flex",justifyContent:"space-between",
-                  padding:"5px 0",borderBottom:`1px solid ${G.border}`,fontSize:11}}>
-                  <span style={{color:G.textSec}}>Semana del {sem.sid}</span>
-                  <span style={{color:G.gold,fontWeight:600}}>${fmt(sem.total||0)}</span>
-                </div>
-              ))}
+              {semanas.map(sem => {
+                const expandida = semanaExpandidaId === sem.sid;
+                const detalle   = detalleSemanasCache[sem.sid];
+                return (
+                  <div key={sem.sid} style={{borderBottom:`1px solid ${G.border}`}}>
+                    <div onClick={()=>toggleDetalleSemana(sem.sid)}
+                      style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                        padding:"7px 2px",fontSize:11,cursor:"pointer"}}>
+                      <span style={{color:G.textSec,display:"flex",alignItems:"center",gap:5}}>
+                        <span style={{fontSize:9,color:G.textDim,display:"inline-block",
+                          transition:"transform .15s",transform:expandida?"rotate(90deg)":"rotate(0deg)"}}>▸</span>
+                        Semana del {sem.sid}
+                      </span>
+                      <span style={{color:G.gold,fontWeight:600}}>${fmt(sem.total||0)}</span>
+                    </div>
+                    {expandida && (
+                      <div style={{padding:"2px 0 10px 14px"}}>
+                        {!detalle ? (
+                          <div style={{fontSize:10,color:G.textDim,padding:"6px 0"}}>Cargando…</div>
+                        ) : DIAS_ORDEN.filter(d=>detalle.dias?.[d]).length===0 ? (
+                          <div style={{fontSize:10,color:G.textDim,padding:"6px 0"}}>Sin detalle guardado para esta semana.</div>
+                        ) : DIAS_ORDEN.filter(d=>detalle.dias?.[d]).map(dia => {
+                          const dData = detalle.dias[dia];
+                          return (
+                            <div key={dia} style={{padding:"5px 0",borderBottom:`1px solid ${G.border}55`}}>
+                              <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                                <span style={{fontSize:10,fontWeight:600,color:G.text}}>{dia}</span>
+                                <span style={{fontSize:10,color:G.gold,fontWeight:600}}>${fmt(dData.total||0)}</span>
+                              </div>
+                              {(dData.items||[]).map((it,i) => (
+                                <div key={i} style={{display:"flex",justifyContent:"space-between",
+                                  fontSize:9,color:G.textDim,padding:"1px 0"}}>
+                                  <span style={{textTransform:"capitalize"}}>{it.texto}
+                                    {it.cantidad ? ` · ${it.cantidad}${VP_UNIDADES.find(u=>u.id===it.unidad)?.label}` : ""}
+                                  </span>
+                                  {it.monto ? <span style={{color:G.textSec}}>${fmt(it.monto)}</span> : null}
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               <div style={{fontSize:9,color:G.textDim,marginTop:6}}>
                 {semanas.reduce((a,s)=>a+(s.cantItems||0),0)} compras registradas
               </div>
