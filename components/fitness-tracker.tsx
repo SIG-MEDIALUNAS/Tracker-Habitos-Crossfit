@@ -3634,7 +3634,7 @@ function VpTablaNutricional({ onBack }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // PANTALLA DE SELECCIÓN — 5 PILARES
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros }) {
+function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros, onSelectPlan }) {
   const [codigo, setCodigo] = useState("");
   const [err, setErr]       = useState("");
   const [scores, setScores] = useState({});
@@ -3728,6 +3728,19 @@ function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros }) 
 
       {/* Botón HOY — acceso directo al día actual sin navegar mes/semana */}
       <div style={{display:"flex",gap:6,marginBottom:20}}>
+        {onSelectPlan && (
+          <button onClick={onSelectPlan}
+            style={{
+              flex:1.4, padding:"12px 6px",
+              background:G.gold, border:`1px solid ${G.gold}`,
+              borderRadius:4, color:G.bg, fontSize:10, letterSpacing:1,
+              fontFamily:"'Courier New',monospace", fontWeight:700,
+              cursor:"pointer", touchAction:"manipulation",
+              WebkitTapHighlightColor:"transparent",
+            }}>
+            🔥 PLAN 100
+          </button>
+        )}
         {onSelectHoy && (
           <button onClick={onSelectHoy}
             style={{
@@ -6353,10 +6366,963 @@ function VpResumenMensual({ mesId }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // APP ROOT VIDA PERSONAL — mes → semana → día
 // ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// MÓDULO: PLAN 100 DÍAS — sistema de acción (hidratación · comidas · balanza
+// crudo→cocido · objetivos diarios/semanales/quincenales · logros · reinicio)
+// Estado en UN documento: vida_personal/_plan100/estado/actual  (+ respaldo local)
+// ═══════════════════════════════════════════════════════════════════════════════
+const PLAN_PATH   = "vida_personal/_plan100/estado/actual";
+const PLAN_LS_KEY = "vp_plan100_v1";
+const PLAN_DIAS_TOTAL = 100;
+
+const PLAN_DEFAULT = {
+  version: 1,
+  inicio: null,               // "YYYY-MM-DD" del Día 1
+  intento: 1,
+  historial: [],              // intentos anteriores archivados
+  perfil: {
+    peso0: "", cintura0: "", cuello: 39, altura: 180,
+    bfObjetivo: 10, aguaMl: 3500,
+    kcal: 2450, prot: 185, carbs: 235, grasas: 80,
+  },
+  // Reparto del día (ajustable). pct = % de las kcal/macros diarias.
+  reparto: [
+    { id:"desayuno", label:"Desayuno",       pct:20, hora:"07:30", nota:"Avena + leche + banana + huevos" },
+    { id:"tupper1",  label:"Tupper 1 (almuerzo)", pct:40, hora:"13:00", nota:"Proteína + carbo + verdura" },
+    { id:"tupper2",  label:"Tupper 2 (cena)",     pct:40, hora:"20:30", nota:"Proteína + carbo + verdura" },
+  ],
+  arranque: {},               // pasos de "cómo empezar" tildados
+  dias: {},                   // { "YYYY-MM-DD": {agua, comidas:{}, entreno, descanso, sueno, sinExtras, peso, cintura, nota} }
+  revisiones: {},             // { quincenaIdx: true }
+  logros: {},                 // { logroId: timestamp }
+  factores: {},               // factores cocido/crudo propios { "arroz": 2.6 }
+};
+
+// Factores cocido ÷ crudo (los de la teoría de la app) — editables con "mi factor"
+const PLAN_FACTORES_BASE = [
+  { id:"pollo",     label:"Pechuga de pollo",      f:0.73 },
+  { id:"carne",     label:"Carne vacuna magra",    f:0.72 },
+  { id:"arroz",     label:"Arroz blanco",          f:2.6  },
+  { id:"pastas",    label:"Pastas",                f:2.3  },
+  { id:"papa",      label:"Papa / batata hervida", f:0.9  },
+  { id:"legumbres", label:"Legumbres secas",       f:2.7  },
+];
+
+// ── Fechas (siempre locales, formato ISO corto) ───────────────────────────────
+function planISO(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function planSumarDias(iso, n) {
+  const [y,m,d] = iso.split("-").map(Number);
+  return planISO(new Date(y, m-1, d+n));
+}
+function planDiasEntre(a, b) {
+  const [y1,m1,d1] = a.split("-").map(Number), [y2,m2,d2] = b.split("-").map(Number);
+  return Math.round((Date.UTC(y2,m2-1,d2) - Date.UTC(y1,m1-1,d1)) / 86400000);
+}
+function planNum(v) {
+  const n = parseFloat(String(v ?? "").replace(",", "."));
+  return isNaN(n) ? null : n;
+}
+function planFechaCorta(iso) {
+  const [y,m,d] = iso.split("-").map(Number);
+  const dt = new Date(y, m-1, d);
+  return `${DIAS[(dt.getDay()+6)%7].slice(0,3)} ${d}/${m}`;
+}
+function planMerge(guardado) {
+  const g = guardado || {};
+  return {
+    ...PLAN_DEFAULT, ...g,
+    perfil: { ...PLAN_DEFAULT.perfil, ...(g.perfil||{}) },
+    reparto: (g.reparto && g.reparto.length) ? g.reparto : PLAN_DEFAULT.reparto,
+    arranque: g.arranque||{}, dias: g.dias||{}, revisiones: g.revisiones||{},
+    logros: g.logros||{}, factores: g.factores||{}, historial: g.historial||[],
+  };
+}
+
+// ── Macros por comida a partir del objetivo diario y el % de cada comida ──────
+function planMacrosComida(perfil, pct) {
+  const k = (pct||0) / 100;
+  return {
+    kcal: Math.round(perfil.kcal*k), prot: Math.round(perfil.prot*k),
+    carbs: Math.round(perfil.carbs*k), grasas: Math.round(perfil.grasas*k),
+  };
+}
+
+// ── Puntaje de un día ─────────────────────────────────────────────────────────
+// NÚCLEO (define "día cumplido"): todas las comidas del plan + agua + sin extras.
+// EXTRAS (suman al %, pero no rompen la racha): entreno/descanso y sueño.
+function planScoreDia(estado, iso) {
+  const d = estado.dias[iso] || {};
+  const comidasOk = estado.reparto.filter(r => d.comidas?.[r.id]).length;
+  const comidasTot = estado.reparto.length;
+  const aguaOk = (d.agua||0) >= estado.perfil.aguaMl;
+  const sinExtras = !!d.sinExtras;
+  const entrenoOk = !!(d.entreno || d.descanso);
+  const suenoOk = !!d.sueno;
+  const nucleoHecho = comidasOk + (aguaOk?1:0) + (sinExtras?1:0);
+  const nucleoTotal = comidasTot + 2;
+  const hechos = nucleoHecho + (entrenoOk?1:0) + (suenoOk?1:0);
+  const total = nucleoTotal + 2;
+  return {
+    comidasOk, comidasTot, aguaOk, sinExtras, entrenoOk, suenoOk,
+    hechos, total, pct: Math.round(hechos/total*100),
+    cumplido: nucleoHecho === nucleoTotal,
+    hayRegistro: Object.keys(d).length > 0,
+  };
+}
+
+// ── Rachas ────────────────────────────────────────────────────────────────────
+function planRachas(estado, hoy) {
+  if (!estado.inicio) return { actual:0, mejor:0, cumplidosTotal:0 };
+  const n = planDiasEntre(estado.inicio, hoy);
+  let mejor = 0, corrida = 0, cumplidosTotal = 0;
+  for (let i = 0; i <= n; i++) {
+    const ok = planScoreDia(estado, planSumarDias(estado.inicio, i)).cumplido;
+    if (ok) { corrida++; cumplidosTotal++; mejor = Math.max(mejor, corrida); } else corrida = 0;
+  }
+  // racha actual: si hoy todavía no está cumplido, no la corta (cuenta hasta ayer)
+  let actual = 0;
+  let cursor = hoy;
+  if (!planScoreDia(estado, cursor).cumplido) cursor = planSumarDias(cursor, -1);
+  while (planDiasEntre(estado.inicio, cursor) >= 0 && planScoreDia(estado, cursor).cumplido) {
+    actual++; cursor = planSumarDias(cursor, -1);
+  }
+  return { actual, mejor, cumplidosTotal };
+}
+
+// ── Mediciones (peso / cintura) y % graso estimado (US Navy, misma fórmula de la app) ──
+function planMediciones(estado) {
+  return Object.keys(estado.dias).sort()
+    .map(iso => ({ iso, peso: planNum(estado.dias[iso].peso), cintura: planNum(estado.dias[iso].cintura) }))
+    .filter(m => m.peso != null || m.cintura != null);
+}
+function planCuerpoActual(estado) {
+  const p = estado.perfil, med = planMediciones(estado);
+  let peso = planNum(p.peso0), cintura = planNum(p.cintura0);
+  med.forEach(m => { if (m.peso != null) peso = m.peso; if (m.cintura != null) cintura = m.cintura; });
+  const bf0 = planNum(p.cintura0) ? vpCalcularBF(planNum(p.cintura0), planNum(p.altura)||180, planNum(p.cuello)||39) : null;
+  const bf  = cintura ? vpCalcularBF(cintura, planNum(p.altura)||180, planNum(p.cuello)||39) : null;
+  return { peso, cintura, bf, bf0, cintura0: planNum(p.cintura0), peso0: planNum(p.peso0) };
+}
+
+// ── Objetivo corporal: peso meta conservando masa magra y ritmo requerido ─────
+function planObjetivoCorporal(estado, hoy) {
+  const c = planCuerpoActual(estado);
+  const bfObj = planNum(estado.perfil.bfObjetivo) || 10;
+  if (!c.peso || c.bf == null) return null;
+  const masaMagra = c.peso * (1 - c.bf/100);
+  const pesoMeta = masaMagra / (1 - bfObj/100);
+  const grasaAPerder = Math.max(0, c.peso - pesoMeta);
+  const diasRestantes = estado.inicio ? Math.max(1, PLAN_DIAS_TOTAL - (planDiasEntre(estado.inicio, hoy) + 1)) : PLAN_DIAS_TOTAL;
+  const kgSemana = grasaAPerder / (diasRestantes/7);
+  const pctPesoSemana = kgSemana / c.peso * 100;
+  let ritmo = "ok";
+  if (grasaAPerder <= 0) ritmo = "meta";
+  else if (pctPesoSemana > 1) ritmo = "irreal";
+  else if (pctPesoSemana > 0.75) ritmo = "exigente";
+  // % graso al inicio → avance hacia la meta (0..100)
+  let avance = 0;
+  if (c.bf0 != null && c.bf0 > bfObj) avance = Math.max(0, Math.min(100, (c.bf0 - c.bf) / (c.bf0 - bfObj) * 100));
+  if (c.bf != null && c.bf <= bfObj) avance = 100;
+  return { ...c, bfObj, masaMagra, pesoMeta, grasaAPerder, diasRestantes, kgSemana, pctPesoSemana, ritmo, avance };
+}
+
+// ── Objetivos SEMANALES (semana N del plan = días 7k+1 … 7k+7) ────────────────
+function planMetasSemana(estado, hoy) {
+  if (!estado.inicio) return { idx:0, metas:[] };
+  const dn = planDiasEntre(estado.inicio, hoy);
+  const idx = Math.max(0, Math.floor(dn/7));
+  const dias = Array.from({length:7}, (_,i) => planSumarDias(estado.inicio, idx*7+i));
+  const sc = dias.map(iso => planScoreDia(estado, iso));
+  const cuenta = f => sc.filter(f).length;
+  const meds = dias.filter(iso => { const d = estado.dias[iso]; return d && (planNum(d.peso) != null || planNum(d.cintura) != null); }).length;
+  const metas = [
+    { id:"s_cumplidos", emoji:"🎯", label:"Días cumplidos (comidas + agua + sin extras)", actual:cuenta(s=>s.cumplido), meta:5, unidad:"/7" },
+    { id:"s_agua",      emoji:"💧", label:"Días con el agua completa",                    actual:cuenta(s=>s.aguaOk),   meta:5, unidad:"/7" },
+    { id:"s_entreno",   emoji:"🏋️", label:"Entrenamientos realizados",                    actual:dias.filter(iso=>estado.dias[iso]?.entreno).length, meta:4, unidad:"" },
+    { id:"s_sueno",     emoji:"😴", label:"Noches de buen descanso",                      actual:cuenta(s=>s.suenoOk),  meta:5, unidad:"/7" },
+    { id:"s_medicion",  emoji:"📏", label:"Medición de peso / cintura",                   actual:meds,                  meta:1, unidad:"" },
+  ].map(m => ({ ...m, ok: m.actual >= m.meta }));
+  return { idx, dias, metas };
+}
+
+// ── Objetivos QUINCENALES (bloques de 15 días) ────────────────────────────────
+function planMetasQuincena(estado, hoy) {
+  if (!estado.inicio) return { idx:0, metas:[] };
+  const dn = planDiasEntre(estado.inicio, hoy);
+  const idx = Math.max(0, Math.floor(dn/15));
+  const dias = Array.from({length:15}, (_,i) => planSumarDias(estado.inicio, idx*15+i));
+  const cumplidos = dias.filter(iso => planScoreDia(estado, iso).cumplido).length;
+  const meds = dias.map(iso => ({ iso, c: planNum(estado.dias[iso]?.cintura) })).filter(m => m.c != null);
+  const nMed = dias.filter(iso => { const d = estado.dias[iso]; return d && (planNum(d.peso)!=null || planNum(d.cintura)!=null); }).length;
+  // base de comparación: primera cintura de la quincena, o la cintura de referencia inicial
+  const base = meds.length ? meds[0].c : planNum(estado.perfil.cintura0);
+  const ultima = meds.length ? meds[meds.length-1].c : null;
+  const delta = (base != null && ultima != null && meds.length >= 1) ? +(ultima - base).toFixed(1) : null;
+  const previa = idx === 0 ? planNum(estado.perfil.cintura0) : null;
+  const deltaVsPrev = (previa != null && ultima != null) ? +(ultima - previa).toFixed(1) : delta;
+  const metas = [
+    { id:"q_cumplidos", emoji:"🔥", label:"Días cumplidos en la quincena",       actual:cumplidos, meta:12, unidad:"/15", ok: cumplidos >= 12 },
+    { id:"q_medicion",  emoji:"📏", label:"Mediciones (al menos 2)",              actual:nMed,      meta:2,  unidad:"",    ok: nMed >= 2 },
+    { id:"q_cintura",   emoji:"📉", label:"Cintura baja ≥ 0,5 cm en la quincena", actual: deltaVsPrev == null ? 0 : Math.max(0, -deltaVsPrev), meta:0.5, unidad:" cm", ok: deltaVsPrev != null && deltaVsPrev <= -0.5, nota: deltaVsPrev == null ? "Cargá una cintura para medir" : `variación: ${deltaVsPrev>0?"+":""}${deltaVsPrev} cm` },
+    { id:"q_revision",  emoji:"🧭", label:"Hice mi revisión quincenal y ajusté",  actual: estado.revisiones[idx]?1:0, meta:1, unidad:"", ok: !!estado.revisiones[idx], manual:true },
+  ];
+  return { idx, dias, metas };
+}
+
+// ── Catálogo de LOGROS — todo se calcula desde el registro real ───────────────
+function planLogros(estado, hoy) {
+  const r = planRachas(estado, hoy);
+  const dias = Object.keys(estado.dias);
+  const dd = iso => estado.dias[iso];
+  const contar = f => dias.filter(iso => f(dd(iso), iso)).length;
+  const aguaDias  = contar((d) => (d.agua||0) >= estado.perfil.aguaMl);
+  const entrenos  = contar(d => d.entreno);
+  const comidasCompletas = contar((d, iso) => planScoreDia(estado, iso).comidasOk === estado.reparto.length);
+  const cuerpo = planCuerpoActual(estado);
+  const med = planMediciones(estado);
+  const bajoCintura = (cuerpo.cintura0 && cuerpo.cintura) ? +(cuerpo.cintura0 - cuerpo.cintura).toFixed(1) : 0;
+  const bfActual = med.length ? cuerpo.bf : null;   // solo si hay una medición real dentro del plan
+
+  // semana perfecta: 7 días seguidos cumplidos dentro de una semana del plan
+  let semanaPerfecta = false;
+  if (estado.inicio) {
+    const n = planDiasEntre(estado.inicio, hoy);
+    for (let w = 0; w*7+6 <= n; w++) {
+      if (Array.from({length:7}, (_,i)=>planScoreDia(estado, planSumarDias(estado.inicio, w*7+i)).cumplido).every(Boolean)) semanaPerfecta = true;
+    }
+  }
+  // "volviste": hay un día cumplido posterior a un tropiezo (día no cumplido tras haber cumplido antes)
+  let volviste = false;
+  if (estado.inicio) {
+    const n = planDiasEntre(estado.inicio, hoy);
+    let hubo = false, tropezo = false;
+    for (let i = 0; i <= n; i++) {
+      const ok = planScoreDia(estado, planSumarDias(estado.inicio, i)).cumplido;
+      if (ok && tropezo) volviste = true;
+      if (ok) hubo = true;
+      else if (hubo && i < n) tropezo = true;   // el día de hoy sin cerrar no cuenta como tropiezo
+    }
+  }
+  const L = (id, cat, emoji, titulo, desc, actual, meta) => ({ id, cat, emoji, titulo, desc, actual: Math.min(actual, meta), meta, ok: actual >= meta });
+  return [
+    L("c1","Constancia","👣","Primer paso","Cumplí tu primer día completo",              r.cumplidosTotal, 1),
+    L("c3","Constancia","🔥","Ignición","3 días cumplidos seguidos",                     r.mejor, 3),
+    L("c7","Constancia","🛡️","Semana de hierro","7 días cumplidos seguidos",              r.mejor, 7),
+    L("c15","Constancia","⚔️","Quincena","15 días cumplidos seguidos",                    r.mejor, 15),
+    L("c30","Constancia","🏔️","Un mes entero","30 días cumplidos seguidos",              r.mejor, 30),
+    L("c50","Constancia","🌗","Mitad del camino","50 días cumplidos (en total)",         r.cumplidosTotal, 50),
+    L("c100","Constancia","👑","Cambio físico","100 días cumplidos (en total)",          r.cumplidosTotal, 100),
+    L("sp","Constancia","💎","Semana perfecta","Una semana del plan con 7/7 días cumplidos", semanaPerfecta?1:0, 1),
+    L("h1","Hidratación","💧","Primera gota","Completá tu meta de agua un día",          aguaDias, 1),
+    L("h7","Hidratación","🌊","Río","Meta de agua en 7 días",                             aguaDias, 7),
+    L("h30","Hidratación","🌐","Océano","Meta de agua en 30 días",                       aguaDias, 30),
+    L("k5","Cocina","🍱","Tupper en marcha","5 días con todas las comidas del plan",      comidasCompletas, 5),
+    L("k21","Cocina","👨‍🍳","Maestro del tupper","21 días con todas las comidas",          comidasCompletas, 21),
+    L("e10","Entrenamiento","💪","Diez sesiones","10 entrenamientos registrados",         entrenos, 10),
+    L("e30","Entrenamiento","🏋️","Treinta sesiones","30 entrenamientos registrados",      entrenos, 30),
+    L("m1","Cuerpo","📏","Punto de partida","Primera medición dentro del plan",           med.length, 1),
+    L("m2","Cuerpo","📉","Cintura −2 cm","Bajá 2 cm de cintura",                          bajoCintura, 2),
+    L("m5","Cuerpo","📐","Cintura −5 cm","Bajá 5 cm de cintura",                          bajoCintura, 5),
+    L("m10","Cuerpo","🚀","Cintura −10 cm","Bajá 10 cm de cintura",                       bajoCintura, 10),
+    { id:"b15", cat:"Cuerpo", emoji:"🎽", titulo:"Bajo 15%", desc:"% graso estimado ≤ 15%", meta:1, actual:(bfActual!=null&&bfActual<=15)?1:0, ok: bfActual!=null&&bfActual<=15 },
+    { id:"b12", cat:"Cuerpo", emoji:"⚡", titulo:"Bajo 12%", desc:"% graso estimado ≤ 12%", meta:1, actual:(bfActual!=null&&bfActual<=12)?1:0, ok: bfActual!=null&&bfActual<=12 },
+    { id:"b10", cat:"Cuerpo", emoji:"🏆", titulo:"META 10%",  desc:"% graso estimado ≤ tu objetivo", meta:1, actual:(bfActual!=null&&bfActual<=(planNum(estado.perfil.bfObjetivo)||10))?1:0, ok: bfActual!=null&&bfActual<=(planNum(estado.perfil.bfObjetivo)||10) },
+    L("v1","Resiliencia","🌱","El que se levanta","Volviste a cumplir tras un día fallado", volviste?1:0, 1),
+    L("v2","Resiliencia","♻️","Reinicio valiente","Reiniciaste el plan sin abandonar",      estado.historial.length, 1),
+  ];
+}
+
+// ── Balanza crudo ↔ cocido ────────────────────────────────────────────────────
+// Filas: {nombre, crudo (g total), cocido (g total ya cocido, opcional)} + N tuppers.
+// Todo lo cocinado junto y bien mezclado se reparte en partes iguales.
+function planDividirTuppers(filas, nTuppers) {
+  const n = Math.max(1, parseInt(nTuppers) || 1);
+  return filas.map(f => {
+    const crudo = planNum(f.crudo), cocido = planNum(f.cocido);
+    if (crudo == null || crudo <= 0) return { ...f, ok:false };
+    return {
+      nombre: f.nombre || "Ingrediente", ok:true,
+      crudoPorTupper: crudo / n,
+      cocidoPorTupper: cocido != null && cocido > 0 ? cocido / n : null,
+      factor: cocido != null && cocido > 0 ? cocido / crudo : null,
+    };
+  });
+}
+function planFactorDe(estado, id) {
+  if (estado.factores[id]) return estado.factores[id];
+  return PLAN_FACTORES_BASE.find(x => x.id === id)?.f || null;
+}
+
+// ── Mensajes motivacionales — acción, no solo ánimo ──────────────────────────
+const PLAN_MENSAJES = [
+  "Hoy no tenés que ser perfecto: tenés que cumplir el núcleo. Comidas, agua, sin extras.",
+  "La disciplina es hacer lo que dijiste, aunque ya no tengas ganas. Hoy la elegís vos.",
+  "Cada tupper que abrís es un voto por el cuerpo que querés. Votá.",
+  "El % graso baja en la cocina y se moldea en el gimnasio. Empezá por la cocina.",
+  "No negocies con vos mismo a las 22:00. La decisión ya la tomaste a la mañana.",
+  "Todo lo puedes en Cristo que te fortalece. Y la balanza también se usa con fe.",
+  "Un día cumplido más. La constancia aburrida es la que cambia cuerpos.",
+  "Si hoy tenés poca energía, cumplí lo mínimo: el próximo tupper, el agua y 10 minutos de movimiento.",
+  "No compites con nadie: solo con el Álvaro de ayer. Superalo por 1%.",
+  "El que comenzó en vos la buena obra, la perfeccionará. Vos poné la acción de hoy.",
+  "Tomar agua no es un detalle: es rendimiento, saciedad y recuperación. Un vaso ahora.",
+  "La motivación llega después de empezar. Abrí la app, tildá lo primero y seguí.",
+  "Un tropiezo no es un fracaso; dos seguidos ya es un hábito nuevo. Hoy cortás la cadena.",
+  "Pesá crudo, anotá crudo, dividí parejo. Sin dudas, sin vueltas. Sistema > ganas.",
+  "Tu futuro yo con 10% de grasa te está mirando. ¿Qué quiere que hagas hoy?",
+  "Encomienda tus obras al Señor y tus pensamientos serán afirmados. Avanzá con paz.",
+  "El progreso real es lento y se nota en la cintura antes que en la balanza. Medite cada semana.",
+  "Los días buenos suman. Los días difíciles construyen carácter. Los dos cuentan si cumplís.",
+  "Preparar hoy los tupper de mañana es el mejor regalo que le hacés a tu yo de mañana.",
+  "Eres más que vencedor. Levantate, cumplí el núcleo y cerrá el día con orgullo.",
+];
+function planMensaje(ctx) {
+  const { diaN, racha, ayerFallo, hoyCumplido, aguaPct, hora } = ctx;
+  if (hoyCumplido) return "🔥 Día cumplido. Cerraste el núcleo: comidas, agua y disciplina. Descansá tranquilo, mañana repetimos.";
+  if (ayerFallo) return "Ayer quedó atrás. La regla es simple: nunca dos días seguidos. Hoy volvés con el próximo tupper y el primer vaso de agua.";
+  if (racha >= 30) return `👑 ${racha} días seguidos. Esto ya no es motivación: es identidad. Seguí siendo esa persona.`;
+  if (racha >= 14) return `⚔️ ${racha} días de racha. La mayoría abandona antes. Vos no. Cuidá la cadena hoy.`;
+  if (racha >= 7)  return `🛡️ ${racha} días de racha. Una semana de hierro. Ahora a hacerla costumbre.`;
+  if (racha >= 3)  return `🔥 ${racha} días seguidos. Se está prendiendo. No lo apagues hoy.`;
+  if (hora >= 15 && aguaPct < 50) return "💧 Ya pasó la mitad del día y vas corto de agua. Tomá 500 ml ahora y ponete al día.";
+  return PLAN_MENSAJES[((diaN || 0) + new Date().getDate()) % PLAN_MENSAJES.length];
+}
+
+// ── Persistencia: Firestore si hay, respaldo en localStorage ──────────────────
+async function planCargarEstado() {
+  if (firebaseOk) {
+    try {
+      const snap = await getDoc(doc(db, PLAN_PATH));
+      if (snap.exists()) return planMerge(snap.data());
+    } catch (e) {}
+  }
+  try {
+    const raw = typeof localStorage !== "undefined" && localStorage.getItem(PLAN_LS_KEY);
+    if (raw) return planMerge(JSON.parse(raw));
+  } catch (e) {}
+  return planMerge(null);
+}
+async function planGuardarEstado(estado) {
+  const limpio = JSON.parse(JSON.stringify(estado));
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(PLAN_LS_KEY, JSON.stringify(limpio)); } catch (e) {}
+  if (firebaseOk) { try { await setDoc(doc(db, PLAN_PATH), limpio); } catch (e) {} }
+}
+// Cada logro nuevo también queda como trofeo en la pantalla 🏆 TROFEOS
+async function planEspejarTrofeo(logro) {
+  if (!firebaseOk) return;
+  try {
+    const ref = doc(db, vpLogrosPath());
+    const snap = await getDoc(ref);
+    const items = snap.exists() ? (snap.data().items || []) : [];
+    const id = `plan_${logro.id}`;
+    if (items.some(i => i.id === id)) return;
+    items.unshift({ id, fecha: Date.now(), ejercicioId:null, ejercicioLabel:`Plan 100 · ${logro.titulo}`, tipo:"manual", detalle: logro.desc, manual:false });
+    await setDoc(ref, { items });
+  } catch (e) {}
+}
+
+// ── Piezas visuales ───────────────────────────────────────────────────────────
+function PlanBarra({ pct, color = G.gold, alto = 6 }) {
+  return (
+    <div style={{height:alto,background:"#ffffff0a",borderRadius:alto/2,overflow:"hidden"}}>
+      <div style={{height:alto,width:`${Math.max(0,Math.min(100,pct))}%`,background:color,borderRadius:alto/2,transition:"width .3s",boxShadow:`0 0 6px ${color}55`}}/>
+    </div>
+  );
+}
+function PlanCaja({ titulo, children, color = G.gold, style }) {
+  return (
+    <div style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",background:G.surf2,marginBottom:10,...style}}>
+      {titulo && <div style={{fontSize:9,color,letterSpacing:2,marginBottom:9,fontFamily:"'Courier New',monospace"}}>{titulo}</div>}
+      {children}
+    </div>
+  );
+}
+function PlanCheck({ hecho, onClick, children, sub, derecha }) {
+  return (
+    <div onClick={onClick}
+      style={{display:"flex",alignItems:"center",gap:10,padding:"10px 10px",marginBottom:5,borderRadius:4,cursor:"pointer",
+        border:`1px solid ${hecho?"#5C8A4A66":G.border}`,background:hecho?G.okBg:G.surf,touchAction:"manipulation",WebkitTapHighlightColor:"transparent"}}>
+      <div style={{width:20,height:20,borderRadius:4,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",
+        border:`1px solid ${hecho?"#7AB85A":G.textDim}`,background:hecho?"#5C8A4A":"transparent",color:G.bg,fontSize:13,fontWeight:700}}>{hecho?"✓":""}</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:12,color:hecho?"#7AB85A":G.text,fontFamily:"system-ui,sans-serif"}}>{children}</div>
+        {sub && <div style={{fontSize:10,color:G.textSec,marginTop:2,fontFamily:"system-ui,sans-serif"}}>{sub}</div>}
+      </div>
+      {derecha}
+    </div>
+  );
+}
+function PlanInput({ label, value, onChange, unidad, tipo = "text", ancho }) {
+  return (
+    <label style={{display:"block",flex:ancho||1}}>
+      <div style={{fontSize:10,color:G.textSec,marginBottom:3,fontFamily:"system-ui,sans-serif"}}>{label}</div>
+      <div style={{display:"flex",alignItems:"center",gap:4}}>
+        <input type={tipo} inputMode={tipo==="number"?"decimal":undefined} value={value ?? ""} onChange={e=>onChange(e.target.value)} style={S.inp(false)}/>
+        {unidad && <span style={{fontSize:11,color:G.textDim}}>{unidad}</span>}
+      </div>
+    </label>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PANTALLA PRINCIPAL DEL PLAN
+// ═══════════════════════════════════════════════════════════════════════════════
+const PLAN_ARRANQUE = [
+  { id:"a1", t:"Anotá tu punto de partida", d:"Peso, cintura (a la altura del ombligo) y una foto de frente y perfil. Sin esto no hay progreso medible." },
+  { id:"a2", t:"Definí tu meta con números", d:"% graso objetivo, agua diaria y macros. Ya vienen cargados; ajustalos en la pestaña METAS." },
+  { id:"a3", t:"Hacé la compra de la semana", d:"Abrí 🛒 Compras y 📦 Stock. Sin comida en casa no hay plan." },
+  { id:"a4", t:"Cociná tu primer lote de tuppers", d:"Usá ⚖️ BALANZA: pesá crudo, cociná junto, pesá el total cocido y dividí parejo." },
+  { id:"a5", t:"Dejá lista la botella de agua", d:"Marcá en la botella los tramos del día. El agua se gana con la botella a la vista." },
+  { id:"a6", t:"Agendá tus entrenos de la semana", d:"Elegí los días y horarios en tu calendario. Un entreno sin hora no existe." },
+  { id:"a7", t:"Elegí tu Día 1 y comprometete", d:"Puede ser hoy. Cuando lo elijas, tocá EMPEZAR. Desde ahí, solo se cumple el núcleo." },
+];
+
+function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbrirCompras }) {
+  const [estado, setEstado]   = useState(null);
+  const [tab, setTab]         = useState("hoy");
+  const [hoy, setHoy]         = useState(planISO());
+  const [fechaSel, setFechaSel] = useState(planISO());
+  const [aviso, setAviso]     = useState(null);
+  const [confirma, setConfirma] = useState(null);
+  const [inicioElegido, setInicioElegido] = useState(planISO());
+  const [filas, setFilas]     = useState([{nombre:"Pollo",crudo:"",cocido:""},{nombre:"Arroz",crudo:"",cocido:""}]);
+  const [nTuppers, setNTuppers] = useState("4");
+  const [conv, setConv]       = useState({ alimento:"pollo", modo:"crudo", peso:"" });
+  const listo = useRef(false);
+
+  // Carga inicial + refresco de "hoy" si la app queda abierta pasada la medianoche
+  useEffect(() => {
+    planCargarEstado().then(e => { setEstado(e); listo.current = true; });
+    const t = setInterval(() => setHoy(planISO()), 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Autoguardado liviano
+  useEffect(() => {
+    if (!estado || !listo.current) return;
+    const t = setTimeout(() => planGuardarEstado(estado), 500);
+    return () => clearTimeout(t);
+  }, [estado]);
+
+  // Desbloqueo de logros (con aviso y espejo en Trofeos)
+  useEffect(() => {
+    if (!estado || !listo.current) return;
+    const nuevos = planLogros(estado, hoy).filter(l => l.ok && !estado.logros[l.id]);
+    if (nuevos.length === 0) return;
+    const ts = Date.now();
+    setEstado(e => ({ ...e, logros: { ...e.logros, ...Object.fromEntries(nuevos.map(l => [l.id, ts])) } }));
+    setAviso(nuevos[0]);
+    nuevos.forEach(planEspejarTrofeo);
+    const t = setTimeout(() => setAviso(null), 6000);
+    return () => clearTimeout(t);
+  }, [estado && JSON.stringify(estado.dias), estado && estado.inicio, hoy]);
+
+  if (!estado) {
+    return <div style={{minHeight:"100vh",background:G.bg,color:G.textDim,display:"flex",alignItems:"center",justifyContent:"center",
+      fontFamily:"'Courier New',monospace",letterSpacing:2,fontSize:11}}>CARGANDO PLAN...</div>;
+  }
+
+  const upd = fn => setEstado(prev => { const c = JSON.parse(JSON.stringify(prev)); fn(c); return c; });
+  const perfil = estado.perfil;
+  const comenzo = !!estado.inicio && planDiasEntre(estado.inicio, hoy) >= 0;
+  const diaN = comenzo ? planDiasEntre(estado.inicio, hoy) + 1 : 0;
+  const rachas = planRachas(estado, hoy);
+  const obj = planObjetivoCorporal(estado, hoy);
+  const logros = planLogros(estado, hoy);
+  const logrados = logros.filter(l => l.ok).length;
+
+  // Día que se está editando (hoy por defecto; se puede retroceder para completar un olvido)
+  const fecha = comenzo ? fechaSel : hoy;
+  const dia = estado.dias[fecha] || {};
+  const sc = planScoreDia(estado, fecha);
+  const setDia = (campo, valor) => upd(c => { c.dias[fecha] = c.dias[fecha] || {}; c.dias[fecha][campo] = valor; });
+  const toggleDia = campo => setDia(campo, !dia[campo]);
+  const toggleComida = id => upd(c => { c.dias[fecha] = c.dias[fecha] || {}; c.dias[fecha].comidas = c.dias[fecha].comidas || {}; c.dias[fecha].comidas[id] = !c.dias[fecha].comidas[id]; });
+  const sumarAgua = ml => upd(c => { c.dias[fecha] = c.dias[fecha] || {}; c.dias[fecha].agua = Math.max(0, (c.dias[fecha].agua||0) + ml); });
+  const setPerfil = (k, v) => upd(c => { c.perfil[k] = v; });
+
+  const ayer = planSumarDias(hoy, -1);
+  const ayerFallo = comenzo && planDiasEntre(estado.inicio, ayer) >= 0 && !planScoreDia(estado, ayer).cumplido;
+  const aguaPctHoy = Math.round(((estado.dias[hoy]?.agua||0) / (planNum(perfil.aguaMl)||3500)) * 100);
+  const mensaje = planMensaje({ diaN, racha: rachas.actual, ayerFallo, hoyCumplido: planScoreDia(estado, hoy).cumplido, aguaPct: aguaPctHoy, hora: new Date().getHours() });
+
+  function empezar() {
+    upd(c => { c.inicio = inicioElegido; c.arranque.a7 = true; });
+    setFechaSel(planISO()); setTab("hoy");
+  }
+  function reinicioTotal(motivo) {
+    upd(c => {
+      c.historial.push({ intento: c.intento, inicio: c.inicio, fin: planISO(), dias: comenzo ? diaN : 0, cumplidos: rachas.cumplidosTotal, mejorRacha: rachas.mejor, motivo });
+      c.intento += 1; c.inicio = planISO(); c.dias = {}; c.revisiones = {}; c.logros = {};
+    });
+    setConfirma(null); setFechaSel(planISO()); setTab("hoy");
+  }
+
+  const TABS = [["hoy","⚡ HOY"],["comidas","🍽 COMIDAS"],["balanza","⚖️ BALANZA"],["metas","🎯 METAS"],["logros","🏆 LOGROS"],["reinicio","🔄 REINICIO"]];
+  const fmt = n => Math.round(n).toLocaleString("es-AR");
+  const fmt1 = n => (Math.round(n*10)/10).toLocaleString("es-AR");
+  const btnGrande = { width:"100%", padding:"12px", borderRadius:4, border:"none", background:G.gold, color:G.bg, fontSize:12, fontWeight:700, cursor:"pointer", letterSpacing:1, touchAction:"manipulation" };
+  const btnLinea  = { flex:1, padding:"10px 4px", borderRadius:3, border:`1px solid ${G.border}`, background:G.surf, color:G.textSec, fontSize:10, fontWeight:600, cursor:"pointer", touchAction:"manipulation" };
+
+  // ───────────────────────── HOY ─────────────────────────
+  const tabHoy = !comenzo ? (
+    <PlanCaja titulo="TODAVÍA NO EMPEZASTE">
+      <div style={{fontSize:12,color:G.textSec,lineHeight:1.6,marginBottom:12,fontFamily:"system-ui,sans-serif"}}>
+        Tu plan de 100 días arranca cuando elijas el Día 1. Andá a <strong style={{color:G.gold}}>🔄 REINICIO</strong> y seguí los 7 pasos de arranque.
+      </div>
+      <button style={btnGrande} onClick={()=>setTab("reinicio")}>🚀 IR A CÓMO EMPEZAR</button>
+    </PlanCaja>
+  ) : (
+    <>
+      {/* navegación de día */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+        <button style={S.btnSm(false)} disabled={planDiasEntre(estado.inicio, fecha) <= 0} onClick={()=>setFechaSel(planSumarDias(fecha,-1))}>◀</button>
+        <div style={{fontSize:11,color:G.text,letterSpacing:1,fontFamily:"'Courier New',monospace"}}>
+          {fecha===hoy ? "HOY" : planFechaCorta(fecha).toUpperCase()} · DÍA {planDiasEntre(estado.inicio, fecha)+1}
+        </div>
+        <button style={S.btnSm(false)} disabled={fecha>=hoy} onClick={()=>setFechaSel(planSumarDias(fecha,1))}>▶</button>
+      </div>
+
+      <PlanCaja titulo="NÚCLEO DEL DÍA" style={{borderColor: sc.cumplido ? "#5C8A4A" : G.border}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:G.textSec,marginBottom:5,fontFamily:"system-ui,sans-serif"}}>
+          <span>{sc.cumplido ? "🔥 Día cumplido" : "Falta para cerrar el día"}</span>
+          <span style={{color:G.text}}>{sc.pct}%</span>
+        </div>
+        <PlanBarra pct={sc.pct} color={sc.cumplido ? "#7AB85A" : G.gold}/>
+      </PlanCaja>
+
+      {/* Hidratación */}
+      <PlanCaja titulo="💧 HIDRATACIÓN" color="#6FA3D4">
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+          <div style={{fontSize:22,fontWeight:700,color:"#6FA3D4",fontFamily:"'Courier New',monospace"}}>{fmt1((dia.agua||0)/1000)} L</div>
+          <div style={{fontSize:11,color:G.textSec,fontFamily:"system-ui,sans-serif"}}>meta {fmt1((planNum(perfil.aguaMl)||3500)/1000)} L</div>
+        </div>
+        <PlanBarra pct={((dia.agua||0)/(planNum(perfil.aguaMl)||3500))*100} color="#6FA3D4" alto={8}/>
+        <div style={{display:"flex",gap:6,marginTop:10}}>
+          {[[-250,"−250"],[250,"+250 ml"],[500,"+500 ml"],[750,"+750 ml"]].map(([ml,l])=>(
+            <button key={ml} onClick={()=>sumarAgua(ml)} style={{...btnLinea,color:ml<0?G.textDim:"#6FA3D4",borderColor:ml<0?G.border:"#6FA3D444"}}>{l}</button>
+          ))}
+        </div>
+        <div style={{fontSize:10,color:G.textDim,lineHeight:1.6,marginTop:8,fontFamily:"system-ui,sans-serif"}}>
+          Ritmo sugerido: 500 ml al despertar · 500 ml a media mañana · 500 ml antes de cada comida · 750 ml durante el entrenamiento · el resto a la tarde.
+          Orina clara = vas bien.
+        </div>
+      </PlanCaja>
+
+      {/* Comidas */}
+      <PlanCaja titulo="🍽 COMIDAS DEL PLAN">
+        {estado.reparto.map(r => {
+          const m = planMacrosComida(perfil, r.pct);
+          return (
+            <PlanCheck key={r.id} hecho={!!dia.comidas?.[r.id]} onClick={()=>toggleComida(r.id)}
+              sub={`${r.hora} · ${m.kcal} kcal · P${m.prot} C${m.carbs} G${m.grasas}`}>
+              {r.label}
+            </PlanCheck>
+          );
+        })}
+        <PlanCheck hecho={!!dia.sinExtras} onClick={()=>toggleDia("sinExtras")} sub="Nada fuera del plan (picoteo, gaseosas, alcohol, 'un bocadito')">Cumplí sin extras</PlanCheck>
+      </PlanCaja>
+
+      {/* Cuerpo y hábitos */}
+      <PlanCaja titulo="💪 ENTRENO Y DESCANSO">
+        <PlanCheck hecho={!!dia.entreno} onClick={()=>upd(c=>{c.dias[fecha]=c.dias[fecha]||{};c.dias[fecha].entreno=!c.dias[fecha].entreno; if(c.dias[fecha].entreno)c.dias[fecha].descanso=false;})} sub="CrossFit / fuerza / cardio">Entrené hoy</PlanCheck>
+        <PlanCheck hecho={!!dia.descanso} onClick={()=>upd(c=>{c.dias[fecha]=c.dias[fecha]||{};c.dias[fecha].descanso=!c.dias[fecha].descanso; if(c.dias[fecha].descanso)c.dias[fecha].entreno=false;})} sub="Día de descanso planificado (caminata suave, movilidad)">Descanso activo</PlanCheck>
+        <PlanCheck hecho={!!dia.sueno} onClick={()=>toggleDia("sueno")} sub="Dormí 7 h o más">Buen descanso anoche</PlanCheck>
+      </PlanCaja>
+
+      <PlanCaja titulo="📏 MEDICIÓN (1 vez por semana, en ayunas)">
+        <div style={{display:"flex",gap:8}}>
+          <PlanInput label="Peso" tipo="number" unidad="kg" value={dia.peso} onChange={v=>setDia("peso",v)}/>
+          <PlanInput label="Cintura (ombligo)" tipo="number" unidad="cm" value={dia.cintura} onChange={v=>setDia("cintura",v)}/>
+        </div>
+        {planNum(dia.cintura) && (
+          <div style={{fontSize:11,color:G.gold,marginTop:8,fontFamily:"system-ui,sans-serif"}}>
+            % graso estimado (US Navy): <strong>{fmt1(vpCalcularBF(planNum(dia.cintura), planNum(perfil.altura)||180, planNum(perfil.cuello)||39))}%</strong> · orientativo (±3-4%), sirve para ver la tendencia.
+          </div>
+        )}
+      </PlanCaja>
+
+      <PlanCaja titulo="📝 NOTA DEL DÍA">
+        <textarea value={dia.nota||""} onChange={e=>setDia("nota",e.target.value)} placeholder="¿Qué salió bien? ¿Qué ajusto mañana?"
+          style={{...S.inp(false),height:64,resize:"none"}}/>
+      </PlanCaja>
+    </>
+  );
+
+  // ───────────────────────── COMIDAS ─────────────────────────
+  const sumaPct = estado.reparto.reduce((a, r) => a + (planNum(r.pct)||0), 0);
+  const tabComidas = (
+    <>
+      <PlanCaja titulo="CÓMO SE DIVIDE TU DÍA">
+        <div style={{fontSize:11,color:G.textSec,lineHeight:1.6,marginBottom:10,fontFamily:"system-ui,sans-serif"}}>
+          Tu objetivo diario se reparte en comidas. Cada tupper lleva la misma porción cocinada. Podés ajustar el % de cada una (tiene que sumar 100).
+        </div>
+        {estado.reparto.map((r, i) => {
+          const m = planMacrosComida(perfil, planNum(r.pct)||0);
+          return (
+            <div key={r.id} style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"10px",background:G.surf,marginBottom:6}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                <div style={{fontSize:13,color:G.text,fontWeight:600,fontFamily:"system-ui,sans-serif"}}>{r.label}</div>
+                <div style={{fontSize:11,color:G.gold}}>{r.hora}</div>
+              </div>
+              <div style={{fontSize:10,color:G.textSec,marginBottom:6,fontFamily:"system-ui,sans-serif"}}>{r.nota}</div>
+              <div style={{display:"flex",gap:10,fontSize:11,color:G.text,marginBottom:8,fontFamily:"system-ui,sans-serif"}}>
+                <span><strong style={{color:G.gold}}>{m.kcal}</strong> kcal</span><span>P <strong>{m.prot}</strong></span><span>C <strong>{m.carbs}</strong></span><span>G <strong>{m.grasas}</strong></span>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <PlanInput label="% del día" tipo="number" value={r.pct} onChange={v=>upd(c=>{c.reparto[i].pct=v;})}/>
+                <PlanInput label="Hora" value={r.hora} onChange={v=>upd(c=>{c.reparto[i].hora=v;})}/>
+              </div>
+            </div>
+          );
+        })}
+        <div style={{fontSize:11,color:Math.round(sumaPct)===100?"#7AB85A":"#C9724C",fontFamily:"system-ui,sans-serif"}}>
+          Suma: {sumaPct}% {Math.round(sumaPct)===100 ? "✓" : "— debe sumar 100"}
+        </div>
+      </PlanCaja>
+
+      <PlanCaja titulo="REGLAS DE ORO DEL PLATO">
+        {[
+          ["🥩","Proteína primero","Palma de la mano de proteína magra en cada comida principal."],
+          ["🍚","Carbo según el día","Más carbo los días de entreno, y siempre alrededor del entrenamiento."],
+          ["🥦","Verdura libre","La mitad del volumen del plato: saciedad casi sin calorías."],
+          ["🫒","Grasa medida","Aceite y frutos secos se pesan. Son las calorías que más se escapan."],
+        ].map(([e,t,d])=>(
+          <div key={t} style={{display:"flex",gap:10,marginBottom:8}}>
+            <div style={{fontSize:18}}>{e}</div>
+            <div style={{fontFamily:"system-ui,sans-serif"}}><div style={{fontSize:12,color:G.text,fontWeight:600}}>{t}</div><div style={{fontSize:11,color:G.textSec,lineHeight:1.5}}>{d}</div></div>
+          </div>
+        ))}
+      </PlanCaja>
+      <div style={{display:"flex",gap:6,marginBottom:6}}>
+        <button style={btnLinea} onClick={()=>onAbrirCocina?.()}>🍳 COCINA</button>
+        <button style={btnLinea} onClick={()=>onAbrirCompras?.()}>🛒 COMPRAS</button>
+        <button style={btnLinea} onClick={()=>onAbrirTabla?.()}>📊 TABLA</button>
+      </div>
+    </>
+  );
+
+  // ───────────────────────── BALANZA (crudo ↔ cocido) ─────────────────────────
+  const resultados = planDividirTuppers(filas, nTuppers);
+  const factoresLista = [
+    ...PLAN_FACTORES_BASE.map(f => ({ id:f.id, label:f.label, f: estado.factores[f.id] || f.f, propio: !!estado.factores[f.id] })),
+    ...Object.keys(estado.factores).filter(k => !PLAN_FACTORES_BASE.some(b => b.id === k)).map(k => ({ id:k, label:k, f:estado.factores[k], propio:true })),
+  ];
+  const convF = (factoresLista.find(x => x.id === conv.alimento) || {}).f;
+  const convPeso = planNum(conv.peso);
+  const convRes = (convF && convPeso) ? (conv.modo === "crudo" ? convPeso * convF : convPeso / convF) : null;
+  const tabBalanza = (
+    <>
+      <PlanCaja titulo="LA REGLA QUE ELIMINA LA CONFUSIÓN">
+        <div style={{fontSize:12,color:G.text,lineHeight:1.7,fontFamily:"system-ui,sans-serif"}}>
+          <div>1️⃣ <strong>Anotá SIEMPRE el peso crudo</strong> (es el que usa la tabla nutricional).</div>
+          <div>2️⃣ Cociná todo junto y pesá el <strong>total cocido</strong> (tarando la olla o el bowl).</div>
+          <div>3️⃣ Dividí el cocido en <strong>partes iguales</strong> entre los tuppers.</div>
+          <div>4️⃣ Cada tupper tiene <strong>1/N del crudo</strong>, sin importar cuánto pese cocido.</div>
+        </div>
+        <div style={{fontSize:10,color:G.textSec,marginTop:8,lineHeight:1.5,fontFamily:"system-ui,sans-serif"}}>
+          Los nutrientes no cambian al cocinar: cambia el agua. Por eso el crudo manda y el cocido solo sirve para repartir.
+        </div>
+      </PlanCaja>
+
+      <PlanCaja titulo="1) DIVIDIR MI LOTE EN TUPPERS">
+        <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"flex-end"}}>
+          <PlanInput label="Cantidad de tuppers" tipo="number" value={nTuppers} onChange={setNTuppers} ancho={1}/>
+        </div>
+        {filas.map((f, i) => {
+          const r = resultados[i];
+          return (
+            <div key={i} style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"8px",background:G.surf,marginBottom:6}}>
+              <div style={{display:"flex",gap:6,marginBottom:6}}>
+                <PlanInput label="Ingrediente" value={f.nombre} onChange={v=>setFilas(filas.map((x,j)=>j===i?{...x,nombre:v}:x))} ancho={1.6}/>
+                <PlanInput label="Crudo total" tipo="number" unidad="g" value={f.crudo} onChange={v=>setFilas(filas.map((x,j)=>j===i?{...x,crudo:v}:x))}/>
+                <PlanInput label="Cocido total" tipo="number" unidad="g" value={f.cocido} onChange={v=>setFilas(filas.map((x,j)=>j===i?{...x,cocido:v}:x))}/>
+              </div>
+              {r?.ok && (
+                <div style={{fontSize:11,color:G.text,fontFamily:"system-ui,sans-serif",lineHeight:1.6}}>
+                  <div>Por tupper: <strong style={{color:G.gold}}>{fmt(r.crudoPorTupper)} g crudo</strong>{r.cocidoPorTupper && <> → poné <strong style={{color:"#7AB85A"}}>{fmt(r.cocidoPorTupper)} g cocido</strong></>}</div>
+                  {r.factor && (
+                    <div style={{fontSize:10,color:G.textSec}}>
+                      Factor: ×{r.factor.toFixed(2)}{" "}
+                      <span onClick={()=>upd(c=>{c.factores[(f.nombre||"").trim().toLowerCase()||"alimento"]=+r.factor.toFixed(2);})}
+                        style={{color:G.gold,cursor:"pointer",textDecoration:"underline"}}>guardar como mi factor</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              {filas.length > 1 && <div onClick={()=>setFilas(filas.filter((_,j)=>j!==i))} style={{fontSize:10,color:G.textDim,cursor:"pointer",marginTop:4}}>quitar</div>}
+            </div>
+          );
+        })}
+        <button style={{...btnLinea,width:"100%"}} onClick={()=>setFilas([...filas,{nombre:"",crudo:"",cocido:""}])}>+ Ingrediente</button>
+        <div style={{fontSize:10,color:G.textDim,marginTop:8,lineHeight:1.5,fontFamily:"system-ui,sans-serif"}}>
+          Si cocinás cada cosa por separado (pollo aparte, arroz aparte), cargá el cocido de cada uno: te dice cuánto va de cada cosa en el tupper. Si lo cocinás mezclado, dejá "cocido" vacío y repartí la mezcla en partes iguales.
+        </div>
+      </PlanCaja>
+
+      <PlanCaja titulo="2) CONVERTIDOR RÁPIDO">
+        <div style={{display:"flex",gap:6,marginBottom:8}}>
+          {[["crudo","Tengo CRUDO → ¿cocido?"],["cocido","Tengo COCIDO → ¿crudo?"]].map(([id,l])=>(
+            <button key={id} onClick={()=>setConv({...conv,modo:id})} style={{...btnLinea,...(conv.modo===id?{background:G.goldDim,color:G.gold,borderColor:G.goldMid}:{})}}>{l}</button>
+          ))}
+        </div>
+        <select value={conv.alimento} onChange={e=>setConv({...conv,alimento:e.target.value})} style={{...S.inp(false),marginBottom:8}}>
+          {factoresLista.map(f => <option key={f.id} value={f.id}>{f.label} (×{f.f}){f.propio?" · mi factor":""}</option>)}
+        </select>
+        <PlanInput label={conv.modo==="crudo"?"Peso crudo":"Peso cocido"} tipo="number" unidad="g" value={conv.peso} onChange={v=>setConv({...conv,peso:v})}/>
+        {convRes != null && (
+          <div style={{marginTop:10,padding:"10px",borderRadius:4,background:G.goldDim,border:`1px solid ${G.goldMid}`,fontSize:13,color:G.text,fontFamily:"system-ui,sans-serif"}}>
+            {conv.modo==="crudo" ? <>{fmt(convPeso)} g crudo ≈ <strong style={{color:G.gold}}>{fmt(convRes)} g cocido</strong></>
+                                 : <>{fmt(convPeso)} g cocido ≈ <strong style={{color:G.gold}}>{fmt(convRes)} g crudo</strong></>}
+          </div>
+        )}
+        <div style={{fontSize:10,color:G.textDim,marginTop:8,lineHeight:1.5,fontFamily:"system-ui,sans-serif"}}>
+          Los factores son promedios. Para máxima precisión, usá el bloque 1 una vez por alimento y guardá tu factor real: queda guardado para siempre.
+        </div>
+      </PlanCaja>
+      <button style={{...btnLinea,width:"100%",borderColor:G.goldMid,color:G.gold,background:G.goldDim}} onClick={()=>onAbrirCalculadora?.()}>🎯 ABRIR CALCULADORA DE OBJETIVO (macros por tupper)</button>
+    </>
+  );
+
+  // ───────────────────────── METAS ─────────────────────────
+  const semana = planMetasSemana(estado, hoy);
+  const quincena = planMetasQuincena(estado, hoy);
+  const filaMeta = m => (
+    <div key={m.id} style={{marginBottom:9}}>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3,fontFamily:"system-ui,sans-serif"}}>
+        <span style={{color:m.ok?"#7AB85A":G.text}}>{m.ok?"✓ ":""}{m.emoji} {m.label}</span>
+        <span style={{color:G.textSec,whiteSpace:"nowrap"}}>{Math.round(m.actual*10)/10}{m.unidad?"":""} / {m.meta}{m.unidad}</span>
+      </div>
+      <PlanBarra pct={(m.actual/m.meta)*100} color={m.ok?"#7AB85A":G.gold} alto={5}/>
+      {m.nota && <div style={{fontSize:10,color:G.textDim,marginTop:2}}>{m.nota}</div>}
+    </div>
+  );
+  const metasDiarias = [
+    { id:"d1", emoji:"🍽", label:"Todas las comidas del plan", ok: sc.comidasOk===sc.comidasTot, actual:sc.comidasOk, meta:sc.comidasTot, unidad:"" },
+    { id:"d2", emoji:"💧", label:"Meta de agua", ok: sc.aguaOk, actual:Math.round(((estado.dias[fecha]?.agua||0)/1000)*10)/10, meta:(planNum(perfil.aguaMl)||3500)/1000, unidad:" L" },
+    { id:"d3", emoji:"🚫", label:"Sin extras fuera del plan", ok: sc.sinExtras, actual: sc.sinExtras?1:0, meta:1, unidad:"" },
+    { id:"d4", emoji:"💪", label:"Entrenar o descanso activo", ok: sc.entrenoOk, actual: sc.entrenoOk?1:0, meta:1, unidad:"" },
+    { id:"d5", emoji:"😴", label:"Dormir bien", ok: sc.suenoOk, actual: sc.suenoOk?1:0, meta:1, unidad:"" },
+  ];
+  const tabMetas = !comenzo ? (
+    <PlanCaja titulo="AÚN SIN PLAN ACTIVO">
+      <div style={{fontSize:12,color:G.textSec,marginBottom:10,fontFamily:"system-ui,sans-serif"}}>Elegí tu Día 1 en REINICIO y acá vas a ver tus objetivos diarios, semanales y quincenales.</div>
+      <button style={btnGrande} onClick={()=>setTab("reinicio")}>IR A CÓMO EMPEZAR</button>
+    </PlanCaja>
+  ) : (
+    <>
+      <PlanCaja titulo={`HOY · ${fecha===hoy?"DÍA "+diaN:planFechaCorta(fecha).toUpperCase()}`}>{metasDiarias.map(filaMeta)}</PlanCaja>
+      <PlanCaja titulo={`SEMANA ${semana.idx+1} (días ${semana.idx*7+1}–${semana.idx*7+7})`}>{semana.metas.map(filaMeta)}</PlanCaja>
+      <PlanCaja titulo={`QUINCENA ${quincena.idx+1} (días ${quincena.idx*15+1}–${quincena.idx*15+15})`}>
+        {quincena.metas.map(filaMeta)}
+        <PlanCheck hecho={!!estado.revisiones[quincena.idx]} onClick={()=>upd(c=>{c.revisiones[quincena.idx]=!c.revisiones[quincena.idx];})}
+          sub="Miré mediciones y rachas, y decidí un ajuste (comida, cardio, sueño).">Revisión quincenal hecha</PlanCheck>
+      </PlanCaja>
+
+      <PlanCaja titulo="🎯 CAMINO AL % GRASO OBJETIVO">
+        {!obj ? (
+          <div style={{fontSize:11,color:G.textSec,fontFamily:"system-ui,sans-serif"}}>Cargá peso y cintura iniciales (abajo) para calcular tu peso meta y el ritmo requerido.</div>
+        ) : (
+          <>
+            <div style={{display:"flex",justifyContent:"space-between",fontFamily:"system-ui,sans-serif",marginBottom:6}}>
+              <div><div style={{fontSize:10,color:G.textSec}}>Hoy (est.)</div><div style={{fontSize:20,fontWeight:700,color:G.text}}>{fmt1(obj.bf)}%</div></div>
+              <div style={{textAlign:"center"}}><div style={{fontSize:10,color:G.textSec}}>Peso meta</div><div style={{fontSize:20,fontWeight:700,color:G.gold}}>{fmt1(obj.pesoMeta)} kg</div></div>
+              <div style={{textAlign:"right"}}><div style={{fontSize:10,color:G.textSec}}>Objetivo</div><div style={{fontSize:20,fontWeight:700,color:"#7AB85A"}}>{obj.bfObj}%</div></div>
+            </div>
+            <PlanBarra pct={obj.avance} color="#7AB85A" alto={8}/>
+            <div style={{fontSize:11,color:G.textSec,lineHeight:1.6,marginTop:8,fontFamily:"system-ui,sans-serif"}}>
+              {obj.ritmo==="meta" ? "🏆 Ya estás en tu meta de % graso. Ahora toca mantener." :
+                <>Te faltan ≈ <strong style={{color:G.text}}>{fmt1(obj.grasaAPerder)} kg de grasa</strong> (conservando {fmt1(obj.masaMagra)} kg de masa magra). Con {obj.diasRestantes} días restantes son <strong style={{color:G.text}}>{obj.kgSemana.toFixed(2)} kg/semana</strong> ({obj.pctPesoSemana.toFixed(2)}% del peso).</>}
+            </div>
+            {obj.ritmo==="exigente" && <div style={{fontSize:11,color:"#D4C46F",marginTop:6,fontFamily:"system-ui,sans-serif"}}>⚠ Ritmo exigente (0,75–1% semanal): posible, pero sin margen de error. Cuidá proteína y sueño.</div>}
+            {obj.ritmo==="irreal" && <div style={{fontSize:11,color:"#C9724C",marginTop:6,fontFamily:"system-ui,sans-serif"}}>⚠ Más de 1% de tu peso por semana no es sostenible sin perder músculo. Con este punto de partida conviene estirar la meta (p. ej. 12% en 100 días y 10% en el siguiente ciclo). Es mejor llegar sano que llegar rápido.</div>}
+          </>
+        )}
+      </PlanCaja>
+
+      <PlanCaja titulo="⚙️ MIS DATOS Y OBJETIVOS">
+        <div style={{display:"flex",gap:8,marginBottom:8}}>
+          <PlanInput label="Peso inicial" tipo="number" unidad="kg" value={perfil.peso0} onChange={v=>setPerfil("peso0",v)}/>
+          <PlanInput label="Cintura inicial" tipo="number" unidad="cm" value={perfil.cintura0} onChange={v=>setPerfil("cintura0",v)}/>
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:8}}>
+          <PlanInput label="Altura" tipo="number" unidad="cm" value={perfil.altura} onChange={v=>setPerfil("altura",v)}/>
+          <PlanInput label="Cuello" tipo="number" unidad="cm" value={perfil.cuello} onChange={v=>setPerfil("cuello",v)}/>
+          <PlanInput label="% graso meta" tipo="number" unidad="%" value={perfil.bfObjetivo} onChange={v=>setPerfil("bfObjetivo",v)}/>
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:8}}>
+          <PlanInput label="Agua diaria" tipo="number" unidad="ml" value={perfil.aguaMl} onChange={v=>setPerfil("aguaMl",v)}/>
+          <PlanInput label="Calorías" tipo="number" unidad="kcal" value={perfil.kcal} onChange={v=>setPerfil("kcal",v)}/>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <PlanInput label="Proteína" tipo="number" unidad="g" value={perfil.prot} onChange={v=>setPerfil("prot",v)}/>
+          <PlanInput label="Carbos" tipo="number" unidad="g" value={perfil.carbs} onChange={v=>setPerfil("carbs",v)}/>
+          <PlanInput label="Grasas" tipo="number" unidad="g" value={perfil.grasas} onChange={v=>setPerfil("grasas",v)}/>
+        </div>
+      </PlanCaja>
+    </>
+  );
+
+  // ───────────────────────── LOGROS ─────────────────────────
+  const cats = [...new Set(logros.map(l => l.cat))];
+  const tabLogros = (
+    <>
+      <PlanCaja>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{fontSize:30}}>🏆</div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:16,fontWeight:700,color:G.gold,fontFamily:"'Courier New',monospace"}}>{logrados} / {logros.length}</div>
+            <div style={{fontSize:10,color:G.textSec,fontFamily:"system-ui,sans-serif",marginBottom:5}}>logros desbloqueados · también aparecen en 🏆 TROFEOS</div>
+            <PlanBarra pct={(logrados/logros.length)*100}/>
+          </div>
+        </div>
+      </PlanCaja>
+      {cats.map(cat => (
+        <PlanCaja key={cat} titulo={cat.toUpperCase()}>
+          {logros.filter(l => l.cat === cat).map(l => (
+            <div key={l.id} style={{display:"flex",gap:10,alignItems:"center",marginBottom:9,opacity:l.ok?1:.75}}>
+              <div style={{width:36,height:36,borderRadius:4,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,
+                background:l.ok?G.goldDim:"#ffffff05",border:`1px solid ${l.ok?G.goldMid:G.border}`,filter:l.ok?"none":"grayscale(1)"}}>{l.emoji}</div>
+              <div style={{flex:1,minWidth:0,fontFamily:"system-ui,sans-serif"}}>
+                <div style={{fontSize:12,fontWeight:600,color:l.ok?G.gold:G.text}}>{l.titulo}{l.ok && estado.logros[l.id] ? <span style={{fontSize:9,color:G.textDim,fontWeight:400}}> · {planFechaCorta(planISO(new Date(estado.logros[l.id])))}</span> : null}</div>
+                <div style={{fontSize:10,color:G.textSec,marginBottom:3}}>{l.desc}</div>
+                {!l.ok && l.meta > 1 && <PlanBarra pct={(l.actual/l.meta)*100} alto={4}/>}
+              </div>
+              {!l.ok && l.meta > 1 && <div style={{fontSize:10,color:G.textDim}}>{Math.round(l.actual*10)/10}/{l.meta}</div>}
+            </div>
+          ))}
+        </PlanCaja>
+      ))}
+    </>
+  );
+
+  // ───────────────────────── REINICIO ─────────────────────────
+  const tabReinicio = (
+    <>
+      {!comenzo ? (
+        <>
+          <PlanCaja titulo="🚀 CÓMO EMPEZAR — 7 PASOS">
+            <div style={{fontSize:11,color:G.textSec,lineHeight:1.6,marginBottom:10,fontFamily:"system-ui,sans-serif"}}>
+              Empezar bien es preparar el terreno antes del Día 1. Tildá cada paso a medida que lo hacés.
+            </div>
+            {PLAN_ARRANQUE.map(p => (
+              <PlanCheck key={p.id} hecho={!!estado.arranque[p.id]} onClick={()=>upd(c=>{c.arranque[p.id]=!c.arranque[p.id];})} sub={p.d}>{p.t}</PlanCheck>
+            ))}
+            <div style={{marginTop:10}}>
+              <PlanInput label="Mi Día 1 es" tipo="date" value={inicioElegido} onChange={setInicioElegido}/>
+            </div>
+            <button style={{...btnGrande,marginTop:10}} onClick={empezar}>🔥 EMPEZAR MIS 100 DÍAS</button>
+          </PlanCaja>
+        </>
+      ) : (
+        <PlanCaja titulo={`ESTÁS EN EL DÍA ${diaN}`}>
+          <div style={{fontSize:12,color:G.text,lineHeight:1.6,fontFamily:"system-ui,sans-serif"}}>
+            Intento n.º {estado.intento} · empezó el {planFechaCorta(estado.inicio)} · racha {rachas.actual} · mejor racha {rachas.mejor}.
+          </div>
+        </PlanCaja>
+      )}
+
+      <PlanCaja titulo="🆘 ME SALÍ DEL PLAN — QUÉ HACER">
+        {[
+          ["1","No compenses ni ayunes","Saltearte comidas para 'arreglarlo' dispara el picoteo. La comida siguiente es la del plan."],
+          ["2","Volvé en la próxima comida","No 'desde el lunes'. La regla: nunca dos días seguidos fuera del plan."],
+          ["3","Núcleo mínimo del día difícil","Agua completa + el próximo tupper + 10 minutos de movimiento. Eso ya es un día ganado."],
+          ["4","Anotá qué pasó","En la nota del día: ¿hambre, cansancio, evento? Ajustá para que no se repita."],
+        ].map(([n,t,d])=>(
+          <div key={n} style={{display:"flex",gap:10,marginBottom:9}}>
+            <div style={{width:22,height:22,borderRadius:"50%",background:G.goldDim,border:`1px solid ${G.goldMid}`,color:G.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0}}>{n}</div>
+            <div style={{fontFamily:"system-ui,sans-serif"}}><div style={{fontSize:12,color:G.text,fontWeight:600}}>{t}</div><div style={{fontSize:11,color:G.textSec,lineHeight:1.5}}>{d}</div></div>
+          </div>
+        ))}
+      </PlanCaja>
+
+      {comenzo && (
+        <PlanCaja titulo="🔄 REINICIAR DESDE CERO" color="#C9724C">
+          <div style={{fontSize:11,color:G.textSec,lineHeight:1.6,marginBottom:10,fontFamily:"system-ui,sans-serif"}}>
+            Si necesitás empezar un ciclo nuevo (vacaciones, enfermedad, semanas perdidas), podés reiniciar. Tu intento actual se archiva con sus números
+            y desbloqueás <strong style={{color:G.gold}}>♻️ Reinicio valiente</strong>. Tus mediciones iniciales y objetivos se mantienen.
+          </div>
+          {confirma === "reinicio" ? (
+            <div style={{display:"flex",gap:6}}>
+              <button style={{...btnGrande,background:"#C9724C"}} onClick={()=>reinicioTotal("Reinicio manual")}>SÍ, REINICIAR HOY</button>
+              <button style={{...btnLinea}} onClick={()=>setConfirma(null)}>CANCELAR</button>
+            </div>
+          ) : (
+            <button style={{...btnLinea,width:"100%",borderColor:"#C9724C66",color:"#C9724C"}} onClick={()=>setConfirma("reinicio")}>REINICIAR EL PLAN (nuevo Día 1 = hoy)</button>
+          )}
+        </PlanCaja>
+      )}
+
+      {estado.historial.length > 0 && (
+        <PlanCaja titulo="INTENTOS ANTERIORES">
+          {estado.historial.map((h, i) => (
+            <div key={i} style={{fontSize:11,color:G.textSec,padding:"6px 0",borderBottom:i<estado.historial.length-1?`1px solid ${G.border}`:"none",fontFamily:"system-ui,sans-serif"}}>
+              <strong style={{color:G.text}}>Intento {h.intento}</strong> · {h.dias} días · {h.cumplidos} cumplidos · mejor racha {h.mejorRacha}
+              <div style={{fontSize:10,color:G.textDim}}>{h.inicio} → {h.fin}</div>
+            </div>
+          ))}
+        </PlanCaja>
+      )}
+    </>
+  );
+
+  return (
+    <div style={{fontFamily:"system-ui,sans-serif",maxWidth:430,margin:"0 auto",color:G.text,paddingBottom:56,minHeight:"100vh",background:G.bg}}>
+      {/* Header */}
+      <div style={{padding:"1rem 1rem .75rem",borderBottom:`1px solid ${G.border}`,background:G.surf,marginBottom:10,position:"sticky",top:0,zIndex:5}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div>
+            <div style={{fontSize:13,fontWeight:700,color:G.gold,letterSpacing:1,fontFamily:"'Courier New',monospace"}}>🔥 PLAN 100 DÍAS</div>
+            <div style={{fontSize:10,color:G.textSec,marginTop:2}}>{comenzo ? `Día ${Math.min(diaN,100)} de 100 · racha ${rachas.actual} 🔥` : "Aún sin empezar"}</div>
+          </div>
+          <button onClick={onBack} style={S.btnSm(false)}>☰ Pilares</button>
+        </div>
+        <PlanBarra pct={comenzo ? Math.min(100, diaN) : 0} alto={5}/>
+      </div>
+
+      <div style={{padding:"0 1rem"}}>
+        {/* Mensaje motivacional */}
+        <div style={{border:`1px solid ${G.goldMid}`,background:G.goldDim,borderRadius:4,padding:"12px",marginBottom:10,fontSize:12,color:G.text,lineHeight:1.6}}>
+          {mensaje}
+        </div>
+
+        {aviso && (
+          <div onClick={()=>{setAviso(null); setTab("logros");}} style={{border:"1px solid #7AB85A",background:G.okBg,borderRadius:4,padding:"10px 12px",marginBottom:10,cursor:"pointer"}}>
+            <div style={{fontSize:9,color:"#7AB85A",letterSpacing:2,fontFamily:"'Courier New',monospace"}}>🏆 LOGRO DESBLOQUEADO</div>
+            <div style={{fontSize:13,color:G.text,fontWeight:600,marginTop:3}}>{aviso.emoji} {aviso.titulo}</div>
+            <div style={{fontSize:11,color:G.textSec}}>{aviso.desc}</div>
+          </div>
+        )}
+
+        {/* Tabs */}
+        <div style={{display:"flex",gap:4,marginBottom:12,overflowX:"auto",paddingBottom:2}}>
+          {TABS.map(([id,l]) => (
+            <button key={id} onClick={()=>setTab(id)}
+              style={{whiteSpace:"nowrap",padding:"7px 10px",fontSize:10,cursor:"pointer",letterSpacing:.5,
+                border:`1px solid ${tab===id?G.gold:G.border}`,borderRadius:3,background:tab===id?G.goldDim:G.surf2,
+                color:tab===id?G.gold:G.textSec,fontWeight:tab===id?700:500,touchAction:"manipulation"}}>{l}</button>
+          ))}
+        </div>
+
+        {tab==="hoy" && tabHoy}
+        {tab==="comidas" && tabComidas}
+        {tab==="balanza" && tabBalanza}
+        {tab==="metas" && tabMetas}
+        {tab==="logros" && tabLogros}
+        {tab==="reinicio" && tabReinicio}
+      </div>
+    </div>
+  );
+}
+
+
 function VpApp() {
   const [pilarInicial, setPilarInicial] = useState(null);
   const [mostrarCompras, setMostrarCompras] = useState(false);
   const [mostrarLogros, setMostrarLogros]   = useState(false);
+  const [mostrarPlan, setMostrarPlan]       = useState(false);
   const [mostrarStock, setMostrarStock]     = useState(false);
   const [mostrarCocina, setMostrarCocina]   = useState(false);
   const [mostrarRecetas, setMostrarRecetas] = useState(false);
@@ -6377,6 +7343,17 @@ function VpApp() {
     setWIdx(wHoy);
     setDIdx(dHoy);
     setNav("day");
+  }
+
+  // Plan 100 días — objetivos, hidratación, balanza crudo→cocido, logros y reinicio
+  if (mostrarPlan) {
+    return <VpPlan
+      onBack={() => setMostrarPlan(false)}
+      onAbrirCocina={() => { setMostrarPlan(false); setMostrarCocina(true); }}
+      onAbrirCompras={() => { setMostrarPlan(false); setMostrarCompras(true); }}
+      onAbrirTabla={() => { setMostrarPlan(false); setMostrarTablaNutricional(true); }}
+      onAbrirCalculadora={() => { setMostrarPlan(false); setMostrarCalculadoraObjetivo(true); }}
+    />;
   }
 
   // Lista de compras — pantalla independiente, transversal a los pilares
@@ -6438,6 +7415,7 @@ function VpApp() {
         onSelectHoy={() => irAHoy("fe")}
         onSelectCompras={() => setMostrarCompras(true)}
         onSelectLogros={() => setMostrarLogros(true)}
+        onSelectPlan={() => setMostrarPlan(true)}
       />
     );
   }
