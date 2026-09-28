@@ -977,6 +977,8 @@ const VP_TABLA_NUTRICIONAL_SEED = [
   { id:"seed_20", nombre:"Zapallito verde (Calabacín)",  prot:1.2,  kcal:17,  carbs:3,    grasas:0  },
   { id:"seed_21", nombre:"Cebolla",                      prot:1.1,  kcal:40,  carbs:9,    grasas:0  },
   { id:"seed_22", nombre:"Morrón (Pimiento)",            prot:1.0,  kcal:20,  carbs:5,    grasas:0  },
+  { id:"seed_21b",nombre:"Zanahoria",                    prot:0.9,  kcal:41,  carbs:10,   grasas:0.2},
+  { id:"seed_28b",nombre:"Pan integral",                 prot:9,    kcal:250, carbs:45,   grasas:3  },
   { id:"seed_23", nombre:"Banana",                       prot:1.1,  kcal:89,  carbs:23,   grasas:0  },
   { id:"seed_24", nombre:"Naranja",                      prot:0.9,  kcal:47,  carbs:12,   grasas:0  },
   { id:"seed_25", nombre:"Frutillas (Fresas)",           prot:0.7,  kcal:32,  carbs:8,    grasas:0  },
@@ -1031,6 +1033,8 @@ const VP_SINONIMOS_NUTRICION = {
   "avena":"Avena",
   "leche":"Leche entera",
   "cebolla":"Cebolla", "cebollas":"Cebolla",
+  "zanahoria":"Zanahoria", "zanahorias":"Zanahoria",
+  "pan integral":"Pan integral", "pan":"Pan integral",
   "morron":"Morrón (Pimiento)", "morrón":"Morrón (Pimiento)", "pimiento":"Morrón (Pimiento)",
   "brocoli":"Brócoli", "brócoli":"Brócoli",
 };
@@ -2244,7 +2248,9 @@ function VpTeoriaMacros() {
 // es la cantidad de tuppers: cargás ingredientes crudos totales, elegís en cuántos
 // tuppers se reparte, y te dice si cubre el objetivo o cuánto falta agregar de cada uno.
 // ═══════════════════════════════════════════════════════════════════════════════
-const VP_OBJETIVO_TUPPER_FIJO_DEFAULT = { kcal:1190, carbs:145, prot:75, grasas:35 };
+// Objetivo por tupper por defecto = mitad del objetivo diario del Plan 100 días
+// (2450 kcal / 185 g prot / 235 g carb / 80 g grasas): desayuno 20% + 2 tuppers de 40%.
+const VP_OBJETIVO_TUPPER_FIJO_DEFAULT = { kcal:1225, carbs:118, prot:93, grasas:40 };
 
 function vpCalculadoraObjetivoPath() {
   return "vida_personal/_nutricion/calculadora_objetivo/actual";
@@ -6787,15 +6793,27 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
   const [aviso, setAviso]     = useState(null);
   const [confirma, setConfirma] = useState(null);
   const [inicioElegido, setInicioElegido] = useState(planISO());
-  const [filas, setFilas]     = useState([{nombre:"Pollo",crudo:"",cocido:""},{nombre:"Arroz",crudo:"",cocido:""}]);
-  const [nTuppers, setNTuppers] = useState("4");
+  // Ejemplo precargado: pechuga cocinada aparte + verduras cocinadas juntas,
+  // todo pesado en crudo (tal cual la primera receta real que carguemos acá).
+  const [filas, setFilas]     = useState([
+    { nombre:"Pollo",           crudo:"1000", cocido:"" },
+    { nombre:"Zapallito verde", crudo:"1000", cocido:"" },
+    { nombre:"Zanahoria",       crudo:"250",  cocido:"" },
+    { nombre:"Cebolla",         crudo:"400",  cocido:"" },
+    { nombre:"Papa",            crudo:"400",  cocido:"" },
+    { nombre:"Morrón",          crudo:"400",  cocido:"" },
+  ]);
+  const [nTuppers, setNTuppers] = useState("2");
   const [conv, setConv]       = useState({ alimento:"pollo", modo:"crudo", peso:"" });
+  const [tablaLista, setTablaLista] = useState(!!vpTablaNutricionalCache);
   const listo = useRef(false);
 
   // Carga inicial + refresco de "hoy" si la app queda abierta pasada la medianoche
   useEffect(() => {
     planCargarEstado().then(e => { setEstado(e); listo.current = true; });
     const t = setInterval(() => setHoy(planISO()), 60000);
+    if (!vpTablaNutricionalCache) vpCargarTablaNutricional().then(() => setTablaLista(true));
+    else setTablaLista(true);
     return () => clearInterval(t);
   }, []);
 
@@ -7013,6 +7031,43 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
   const convF = (factoresLista.find(x => x.id === conv.alimento) || {}).f;
   const convPeso = planNum(conv.peso);
   const convRes = (convF && convPeso) ? (conv.modo === "crudo" ? convPeso * convF : convPeso / convF) : null;
+
+  // Macros reales del lote (según tu tabla nutricional 📊) y cuánto aporta cada tupper.
+  // No todos los ingredientes tienen por qué estar en la tabla — los que no se
+  // reconocen simplemente no suman (se avisa cuál falta cargar).
+  const nTuppersNum = Math.max(1, parseInt(nTuppers) || 1);
+  const noEncontrados = [];
+  const macrosBatch = !tablaLista ? null : filas.reduce((acc, f) => {
+    const crudo = planNum(f.crudo);
+    if (!f.nombre?.trim() || !crudo) return acc;
+    const calc = vpCalcularNutricionIngrediente(f.nombre, crudo / 1000, "kg");
+    if (!calc) { noEncontrados.push(f.nombre); return acc; }
+    return { kcal:acc.kcal+calc.kcal, carbs:acc.carbs+calc.carbs, prot:acc.prot+calc.prot, grasas:acc.grasas+calc.grasas };
+  }, { kcal:0, carbs:0, prot:0, grasas:0 });
+  const macrosPorTupper = macrosBatch && {
+    kcal:   macrosBatch.kcal   / nTuppersNum,
+    carbs:  macrosBatch.carbs  / nTuppersNum,
+    prot:   macrosBatch.prot   / nTuppersNum,
+    grasas: macrosBatch.grasas / nTuppersNum,
+  };
+  // Objetivo por tupper = promedio de las comidas que NO son desayuno (tupper 1 / tupper 2, etc.)
+  const comidasNoDesayuno = estado.reparto.filter(r => r.id !== "desayuno");
+  const objetivoTupper = comidasNoDesayuno.length ? comidasNoDesayuno.reduce((acc, r) => {
+    const m = planMacrosComida(perfil, planNum(r.pct) || 0);
+    return { kcal:acc.kcal+m.kcal, carbs:acc.carbs+m.carbs, prot:acc.prot+m.prot, grasas:acc.grasas+m.grasas };
+  }, { kcal:0, carbs:0, prot:0, grasas:0 }) : null;
+  if (objetivoTupper) { const n = comidasNoDesayuno.length; objetivoTupper.kcal/=n; objetivoTupper.carbs/=n; objetivoTupper.prot/=n; objetivoTupper.grasas/=n; }
+  const deltaTupper = (macrosPorTupper && objetivoTupper) ? {
+    kcal:   objetivoTupper.kcal   - macrosPorTupper.kcal,
+    carbs:  objetivoTupper.carbs  - macrosPorTupper.carbs,
+    prot:   objetivoTupper.prot   - macrosPorTupper.prot,
+    grasas: objetivoTupper.grasas - macrosPorTupper.grasas,
+  } : null;
+  const SUGERENCIAS_AGREGADO = {
+    carbs:  "papa/batata hervida, arroz o avena (100 g de papa ≈ 17 g de carbo)",
+    grasas: "aceite de oliva, palta o frutos secos (1 cucharada de aceite ≈ 14 g de grasa)",
+    prot:   "más pollo/carne, huevo o un scoop de proteína (100 g de pollo ≈ 23 g de proteína)",
+  };
   const tabBalanza = (
     <>
       <PlanCaja titulo="LA REGLA QUE ELIMINA LA CONFUSIÓN">
@@ -7062,7 +7117,45 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
         </div>
       </PlanCaja>
 
-      <PlanCaja titulo="2) CONVERTIDOR RÁPIDO">
+      {noEncontrados.length > 0 && (
+        <div style={{fontSize:10,color:"#C9724C",marginBottom:10,fontFamily:"system-ui,sans-serif"}}>
+          ⚠ No encontré en tu 📊 Tabla nutricional: {noEncontrados.join(", ")}. Esos no están sumados abajo — cargalos en la Tabla para que entren en la cuenta.
+        </div>
+      )}
+
+      {macrosPorTupper && objetivoTupper && (
+        <PlanCaja titulo="2) ¿CUBRE TU OBJETIVO DE CADA TUPPER?">
+          <div style={{fontSize:11,color:G.textSec,marginBottom:8,fontFamily:"system-ui,sans-serif"}}>
+            Con {nTuppersNum} tupper{nTuppersNum>1?"s":""}, esto es lo que aporta cada uno según tu 📊 Tabla nutricional, comparado con el objetivo de un almuerzo/cena (promedio de tus comidas que no son desayuno).
+          </div>
+          {[["kcal","Calorías","",""],["prot","Proteína","g","prot"],["carbs","Carbohidratos","g","carbs"],["grasas","Grasas","g","grasas"]].map(([k,l,u,sk])=>{
+            const aporta = macrosPorTupper[k], obj = objetivoTupper[k], delta = deltaTupper[k];
+            const cubierto = delta <= 0.5;
+            return (
+              <div key={k} style={{marginBottom:9}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:11,fontFamily:"system-ui,sans-serif",marginBottom:3}}>
+                  <span style={{color:G.text}}>{l}</span>
+                  <span style={{color:G.textSec}}>{fmt(aporta)}{u} / {fmt(obj)}{u} objetivo</span>
+                </div>
+                <PlanBarra pct={(aporta/obj)*100} color={cubierto?"#7AB85A":"#C9724C"} alto={5}/>
+                <div style={{fontSize:10,marginTop:3,color:cubierto?"#7AB85A":"#C9724C",fontFamily:"system-ui,sans-serif"}}>
+                  {cubierto
+                    ? (delta < -0.5 ? `✓ cubierto, con ${fmt(-delta)}${u} de margen` : "✓ cubierto")
+                    : sk ? `Te faltan ${fmt(delta)}${u} — agregá ${SUGERENCIAS_AGREGADO[sk]}.`
+                         : `Te faltan ${fmt(delta)}${u} — se completa solo al agregar lo de arriba.`}
+                </div>
+              </div>
+            );
+          })}
+          {deltaTupper.prot < -20 && (
+            <div style={{fontSize:10,color:G.textDim,marginTop:4,lineHeight:1.5,fontFamily:"system-ui,sans-serif"}}>
+              La proteína queda bastante por encima del objetivo (esto pasa cuando 1 kg de pollo se reparte en pocos tuppers). No es un problema —ayuda a la saciedad y a cuidar el músculo en déficit— pero si querés ajustar más fino, usá menos pollo por tupper o repartí este lote en más tuppers.
+            </div>
+          )}
+        </PlanCaja>
+      )}
+
+      <PlanCaja titulo="3) CONVERTIDOR RÁPIDO">
         <div style={{display:"flex",gap:6,marginBottom:8}}>
           {[["crudo","Tengo CRUDO → ¿cocido?"],["cocido","Tengo COCIDO → ¿crudo?"]].map(([id,l])=>(
             <button key={id} onClick={()=>setConv({...conv,modo:id})} style={{...btnLinea,...(conv.modo===id?{background:G.goldDim,color:G.gold,borderColor:G.goldMid}:{})}}>{l}</button>
