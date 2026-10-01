@@ -3744,7 +3744,7 @@ function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros, on
               cursor:"pointer", touchAction:"manipulation",
               WebkitTapHighlightColor:"transparent",
             }}>
-            🔥 PLAN 100
+            ❄️ WINTER ARC
           </button>
         )}
         {onSelectHoy && (
@@ -6373,13 +6373,33 @@ function VpResumenMensual({ mesId }) {
 // APP ROOT VIDA PERSONAL — mes → semana → día
 // ═══════════════════════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════════════════════
-// MÓDULO: PLAN 100 DÍAS — sistema de acción (hidratación · comidas · balanza
-// crudo→cocido · objetivos diarios/semanales/quincenales · logros · reinicio)
+// MÓDULO: WINTER ARC · PLAN 100 DÍAS — sistema de acción (hidratación · comidas ·
+// balanza crudo→cocido · objetivos diarios/semanales/quincenales · logros · reinicio)
+// Adaptado del reto viral "Winter Arc" (90-100 días, octubre→enero): 3 fases de
+// ~33 días, hábitos no negociables y "versión mínima" para no romper la racha en
+// un día difícil, en vez del check binario de siempre.
 // Estado en UN documento: vida_personal/_plan100/estado/actual  (+ respaldo local)
 // ═══════════════════════════════════════════════════════════════════════════════
 const PLAN_PATH   = "vida_personal/_plan100/estado/actual";
 const PLAN_LS_KEY = "vp_plan100_v1";
 const PLAN_DIAS_TOTAL = 100;
+
+// ── Fases Winter Arc (bloques de ~33 días) ────────────────────────────────────
+const PLAN_FASES = [
+  { id:1, nombre:"Cimientos",    rango:[1,33],  foco:"Solo 3 no negociables: las comidas del plan, el agua y cero extras. Nada de exigirte más todavía — la meta es no fallar." },
+  { id:2, nombre:"Construcción", rango:[34,66], foco:"Mantené la Fase 1 y sumá un hábito de mentalidad: 10 minutos de lectura o diario, o nada de celular en tus primeros 30 minutos del día." },
+  { id:3, nombre:"Empuje",       rango:[67,100],foco:"Subí la intensidad de un hábito que ya tenés instalado — más entrenos, más pasos o más precisión en las comidas. La recta final cuenta doble." },
+];
+function planFaseDeDia(diaN) {
+  const d = diaN || 1;
+  return PLAN_FASES.find(f => d >= f.rango[0] && d <= f.rango[1]) || PLAN_FASES[PLAN_FASES.length-1];
+}
+// Sugiere el Día 1: si todavía no llegó el 1° de octubre de este año, lo propone
+// como inicio (arranque "oficial" del Winter Arc); si ya pasó, propone hoy.
+function planSugerirInicio(hoy) {
+  const [y, m] = hoy.split("-").map(Number);
+  return m < 10 ? `${y}-10-01` : hoy;
+}
 
 const PLAN_DEFAULT = {
   version: 1,
@@ -6398,8 +6418,11 @@ const PLAN_DEFAULT = {
     { id:"tupper2",  label:"Tupper 2 (cena)",     pct:40, hora:"20:30", nota:"Proteína + carbo + verdura" },
   ],
   arranque: {},               // pasos de "cómo empezar" tildados
-  dias: {},                   // { "YYYY-MM-DD": {agua, comidas:{}, entreno, descanso, sueno, sinExtras, peso, cintura, nota} }
+  // dias: { "YYYY-MM-DD": { agua, comidas:{id: true|"min"|false}, entreno, descanso,
+  //         sueno, sinExtras, mente (Fase 2+), peso, cintura, nota } }
+  dias: {},
   revisiones: {},             // { quincenaIdx: true }
+  notasSemana: {},            // { semanaIdx: "texto" } — qué ayudó/estorbó esa semana
   logros: {},                 // { logroId: timestamp }
   factores: {},               // factores cocido/crudo propios { "arroz": 2.6 }
 };
@@ -6442,6 +6465,7 @@ function planMerge(guardado) {
     perfil: { ...PLAN_DEFAULT.perfil, ...(g.perfil||{}) },
     reparto: (g.reparto && g.reparto.length) ? g.reparto : PLAN_DEFAULT.reparto,
     arranque: g.arranque||{}, dias: g.dias||{}, revisiones: g.revisiones||{},
+    notasSemana: g.notasSemana||{},
     logros: g.logros||{}, factores: g.factores||{}, historial: g.historial||[],
   };
 }
@@ -6456,22 +6480,30 @@ function planMacrosComida(perfil, pct) {
 }
 
 // ── Puntaje de un día ─────────────────────────────────────────────────────────
-// NÚCLEO (define "día cumplido"): todas las comidas del plan + agua + sin extras.
-// EXTRAS (suman al %, pero no rompen la racha): entreno/descanso y sueño.
+// NÚCLEO (define "día cumplido", nunca se rompe por usar la versión mínima):
+// todas las comidas del plan (✓ completo o ➖ mínimo, ambos cuentan) + agua + sin extras.
+// EXTRAS (suman al %, pero no rompen la racha): entreno/descanso, sueño y, desde
+// la Fase 2 del Winter Arc, el hábito de mentalidad.
 function planScoreDia(estado, iso) {
   const d = estado.dias[iso] || {};
-  const comidasOk = estado.reparto.filter(r => d.comidas?.[r.id]).length;
+  const comidasOk = estado.reparto.filter(r => d.comidas?.[r.id]).length; // true o "min" cuentan
   const comidasTot = estado.reparto.length;
+  const comidasMinimos = estado.reparto.filter(r => d.comidas?.[r.id] === "min").length;
   const aguaOk = (d.agua||0) >= estado.perfil.aguaMl;
   const sinExtras = !!d.sinExtras;
   const entrenoOk = !!(d.entreno || d.descanso);
   const suenoOk = !!d.sueno;
+  const diaN = estado.inicio ? planDiasEntre(estado.inicio, iso) + 1 : 1;
+  const fase = planFaseDeDia(diaN);
+  const menteAplica = fase.id >= 2;
+  const menteOk = !!d.mente;
   const nucleoHecho = comidasOk + (aguaOk?1:0) + (sinExtras?1:0);
   const nucleoTotal = comidasTot + 2;
-  const hechos = nucleoHecho + (entrenoOk?1:0) + (suenoOk?1:0);
-  const total = nucleoTotal + 2;
+  const hechos = nucleoHecho + (entrenoOk?1:0) + (suenoOk?1:0) + (menteAplica && menteOk ? 1 : 0);
+  const total = nucleoTotal + 2 + (menteAplica ? 1 : 0);
   return {
-    comidasOk, comidasTot, aguaOk, sinExtras, entrenoOk, suenoOk,
+    comidasOk, comidasTot, comidasMinimos, aguaOk, sinExtras, entrenoOk, suenoOk,
+    menteAplica, menteOk, fase, diaN,
     hechos, total, pct: Math.round(hechos/total*100),
     cumplido: nucleoHecho === nucleoTotal,
     hayRegistro: Object.keys(d).length > 0,
@@ -6495,6 +6527,19 @@ function planRachas(estado, hoy) {
     actual++; cursor = planSumarDias(cursor, -1);
   }
   return { actual, mejor, cumplidosTotal };
+}
+
+// Racha ininterrumpida contando SIEMPRE desde el Día 1 (se corta en la primera
+// falla, sin importar si después se retomó). Mide "fundación sólida": si cubre
+// el rango de una fase, esa fase se completó sin saltearse ni un día.
+function planRachaDesdeInicio(estado, hoy) {
+  if (!estado.inicio) return 0;
+  const n = planDiasEntre(estado.inicio, hoy);
+  let r = 0;
+  for (let i = 0; i <= n; i++) {
+    if (planScoreDia(estado, planSumarDias(estado.inicio, i)).cumplido) r++; else break;
+  }
+  return r;
 }
 
 // ── Mediciones (peso / cintura) y % graso estimado (US Navy, misma fórmula de la app) ──
@@ -6611,8 +6656,16 @@ function planLogros(estado, hoy) {
       else if (hubo && i < n) tropezo = true;   // el día de hoy sin cerrar no cuenta como tropiezo
     }
   }
+  const rachaInicio = planRachaDesdeInicio(estado, hoy);
+  const usoMinimo = dias.some(iso => Object.values(dd(iso).comidas || {}).includes("min"));
   const L = (id, cat, emoji, titulo, desc, actual, meta) => ({ id, cat, emoji, titulo, desc, actual: Math.min(actual, meta), meta, ok: actual >= meta });
   return [
+    L("f1","Fases Winter Arc","🧱","Fase 1 — Cimientos","33 días seguidos sin fallar desde el Día 1",     rachaInicio, 33),
+    L("f2","Fases Winter Arc","🏗️","Fase 2 — Construcción","66 días seguidos sin fallar desde el Día 1", rachaInicio, 66),
+    L("f3","Fases Winter Arc","🚀","Fase 3 — Empuje","Los 100 días sin fallar ni uno desde el inicio",    rachaInicio, 100),
+    { id:"min1", cat:"Resiliencia", emoji:"🪫", titulo:"Supervivencia inteligente",
+      desc:"Usaste la versión mínima en un día difícil y la racha no se rompió",
+      actual: usoMinimo?1:0, meta:1, ok: usoMinimo },
     L("c1","Constancia","👣","Primer paso","Cumplí tu primer día completo",              r.cumplidosTotal, 1),
     L("c3","Constancia","🔥","Ignición","3 días cumplidos seguidos",                     r.mejor, 3),
     L("c7","Constancia","🛡️","Semana de hierro","7 días cumplidos seguidos",              r.mejor, 7),
@@ -6792,7 +6845,7 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
   const [fechaSel, setFechaSel] = useState(planISO());
   const [aviso, setAviso]     = useState(null);
   const [confirma, setConfirma] = useState(null);
-  const [inicioElegido, setInicioElegido] = useState(planISO());
+  const [inicioElegido, setInicioElegido] = useState(() => planSugerirInicio(planISO()));
   // Ejemplo precargado: pechuga cocinada aparte + verduras cocinadas juntas,
   // todo pesado en crudo (tal cual la primera receta real que carguemos acá).
   const [filas, setFilas]     = useState([
@@ -6845,11 +6898,15 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
   const upd = fn => setEstado(prev => { const c = JSON.parse(JSON.stringify(prev)); fn(c); return c; });
   const perfil = estado.perfil;
   const comenzo = !!estado.inicio && planDiasEntre(estado.inicio, hoy) >= 0;
+  // Elegiste Día 1 pero todavía no llegó (ej. "arranco el 1° de octubre" dicho hoy 28/9)
+  const pendienteInicio = !!estado.inicio && !comenzo;
+  const diasParaArrancar = pendienteInicio ? -planDiasEntre(estado.inicio, hoy) : 0;
   const diaN = comenzo ? planDiasEntre(estado.inicio, hoy) + 1 : 0;
   const rachas = planRachas(estado, hoy);
   const obj = planObjetivoCorporal(estado, hoy);
   const logros = planLogros(estado, hoy);
   const logrados = logros.filter(l => l.ok).length;
+  const faseActual = planFaseDeDia(diaN || 1);
 
   // Día que se está editando (hoy por defecto; se puede retroceder para completar un olvido)
   const fecha = comenzo ? fechaSel : hoy;
@@ -6857,7 +6914,10 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
   const sc = planScoreDia(estado, fecha);
   const setDia = (campo, valor) => upd(c => { c.dias[fecha] = c.dias[fecha] || {}; c.dias[fecha][campo] = valor; });
   const toggleDia = campo => setDia(campo, !dia[campo]);
-  const toggleComida = id => upd(c => { c.dias[fecha] = c.dias[fecha] || {}; c.dias[fecha].comidas = c.dias[fecha].comidas || {}; c.dias[fecha].comidas[id] = !c.dias[fecha].comidas[id]; });
+  // Ciclo de 3 estados por comida: vacío → ✓ completo → ➖ mínimo (día difícil,
+  // igual cuenta para el núcleo) → vacío de nuevo.
+  const cicloComida = v => v === true ? "min" : v === "min" ? false : true;
+  const toggleComida = id => upd(c => { c.dias[fecha] = c.dias[fecha] || {}; c.dias[fecha].comidas = c.dias[fecha].comidas || {}; c.dias[fecha].comidas[id] = cicloComida(c.dias[fecha].comidas[id]); });
   const sumarAgua = ml => upd(c => { c.dias[fecha] = c.dias[fecha] || {}; c.dias[fecha].agua = Math.max(0, (c.dias[fecha].agua||0) + ml); });
   const setPerfil = (k, v) => upd(c => { c.perfil[k] = v; });
 
@@ -6868,7 +6928,12 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
 
   function empezar() {
     upd(c => { c.inicio = inicioElegido; c.arranque.a7 = true; });
-    setFechaSel(planISO()); setTab("hoy");
+    setFechaSel(planISO());
+    setTab(planDiasEntre(inicioElegido, hoy) >= 0 ? "hoy" : "reinicio");
+  }
+  function empezarHoy() {
+    upd(c => { c.inicio = hoy; });
+    setFechaSel(hoy); setTab("hoy");
   }
   function reinicioTotal(motivo) {
     upd(c => {
@@ -6885,7 +6950,18 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
   const btnLinea  = { flex:1, padding:"10px 4px", borderRadius:3, border:`1px solid ${G.border}`, background:G.surf, color:G.textSec, fontSize:10, fontWeight:600, cursor:"pointer", touchAction:"manipulation" };
 
   // ───────────────────────── HOY ─────────────────────────
-  const tabHoy = !comenzo ? (
+  const tabHoy = pendienteInicio ? (
+    <PlanCaja titulo="❄️ TU DÍA 1 YA ESTÁ ELEGIDO">
+      <div style={{fontSize:12,color:G.textSec,lineHeight:1.6,marginBottom:12,fontFamily:"system-ui,sans-serif"}}>
+        Tu Winter Arc arranca el <strong style={{color:G.gold}}>{planFechaCorta(estado.inicio)}</strong> — faltan <strong style={{color:G.gold}}>{diasParaArrancar} día{diasParaArrancar===1?"":"s"}</strong>.
+        Usá ese tiempo para terminar los 7 pasos de arranque en 🔄 REINICIO.
+      </div>
+      <div style={{display:"flex",gap:6}}>
+        <button style={{...btnLinea,flex:1}} onClick={()=>setTab("reinicio")}>VER PASOS DE ARRANQUE</button>
+        <button style={{...btnLinea,flex:1,borderColor:G.goldMid,color:G.gold}} onClick={empezarHoy}>EMPEZAR HOY MEJOR</button>
+      </div>
+    </PlanCaja>
+  ) : !comenzo ? (
     <PlanCaja titulo="TODAVÍA NO EMPEZASTE">
       <div style={{fontSize:12,color:G.textSec,lineHeight:1.6,marginBottom:12,fontFamily:"system-ui,sans-serif"}}>
         Tu plan de 100 días arranca cuando elijas el Día 1. Andá a <strong style={{color:G.gold}}>🔄 REINICIO</strong> y seguí los 7 pasos de arranque.
@@ -6901,6 +6977,11 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
           {fecha===hoy ? "HOY" : planFechaCorta(fecha).toUpperCase()} · DÍA {planDiasEntre(estado.inicio, fecha)+1}
         </div>
         <button style={S.btnSm(false)} disabled={fecha>=hoy} onClick={()=>setFechaSel(planSumarDias(fecha,1))}>▶</button>
+      </div>
+
+      <div style={{fontSize:10,lineHeight:1.5,marginBottom:10,fontFamily:"system-ui,sans-serif",
+        color: sc.fase.id===1?"#6FA3D4":sc.fase.id===2?"#D4A35C":"#C9724C"}}>
+        <strong>FASE {sc.fase.id} · {sc.fase.nombre.toUpperCase()}</strong> (días {sc.fase.rango[0]}–{sc.fase.rango[1]}) — {sc.fase.foco}
       </div>
 
       <PlanCaja titulo="NÚCLEO DEL DÍA" style={{borderColor: sc.cumplido ? "#5C8A4A" : G.border}}>
@@ -6929,24 +7010,49 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
         </div>
       </PlanCaja>
 
-      {/* Comidas */}
+      {/* Comidas — 3 estados: vacío / ✓ completo / ➖ mínimo (día difícil, igual cuenta) */}
       <PlanCaja titulo="🍽 COMIDAS DEL PLAN">
         {estado.reparto.map(r => {
           const m = planMacrosComida(perfil, r.pct);
+          const v = dia.comidas?.[r.id];
+          const st = v === true ? "completo" : v === "min" ? "minimo" : "vacio";
+          const color = st==="completo" ? "#7AB85A" : st==="minimo" ? "#D4A35C" : G.textDim;
+          const bg = st==="completo" ? G.okBg : st==="minimo" ? "#2a1f0a" : G.surf;
+          const icon = st==="completo" ? "✓" : st==="minimo" ? "➖" : "";
           return (
-            <PlanCheck key={r.id} hecho={!!dia.comidas?.[r.id]} onClick={()=>toggleComida(r.id)}
-              sub={`${r.hora} · ${m.kcal} kcal · P${m.prot} C${m.carbs} G${m.grasas}`}>
-              {r.label}
-            </PlanCheck>
+            <div key={r.id} onClick={()=>toggleComida(r.id)}
+              style={{display:"flex",alignItems:"center",gap:10,padding:"10px 10px",marginBottom:5,borderRadius:4,cursor:"pointer",
+                border:`1px solid ${st==="vacio"?G.border:color+"66"}`,background:bg,touchAction:"manipulation",WebkitTapHighlightColor:"transparent"}}>
+              <div style={{width:20,height:20,borderRadius:4,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",
+                border:`1px solid ${st==="vacio"?G.textDim:color}`,background:st==="vacio"?"transparent":color,color:G.bg,fontSize:13,fontWeight:700}}>{icon}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12,color:st==="vacio"?G.text:color,fontFamily:"system-ui,sans-serif"}}>
+                  {r.label}{st==="minimo" && <span style={{fontSize:9,marginLeft:6,color:G.textDim}}>(versión mínima)</span>}
+                </div>
+                <div style={{fontSize:10,color:G.textSec,marginTop:2,fontFamily:"system-ui,sans-serif"}}>{r.hora} · {m.kcal} kcal · P{m.prot} C{m.carbs} G{m.grasas}</div>
+              </div>
+            </div>
           );
         })}
+        <div style={{fontSize:9,color:G.textDim,marginBottom:8,fontFamily:"system-ui,sans-serif"}}>
+          Tocá para completo ✓ · tocá de nuevo para versión mínima ➖ (igual cuenta, no rompe la racha) · una tercera vez la vacía.
+        </div>
         <PlanCheck hecho={!!dia.sinExtras} onClick={()=>toggleDia("sinExtras")} sub="Nada fuera del plan (picoteo, gaseosas, alcohol, 'un bocadito')">Cumplí sin extras</PlanCheck>
       </PlanCaja>
+
+      {sc.menteAplica && (
+        <PlanCaja titulo="🧠 HÁBITO DE MENTALIDAD (Fase 2+)">
+          <PlanCheck hecho={!!dia.mente} onClick={()=>toggleDia("mente")}
+            sub="10 min de lectura o diario, o nada de celular en tus primeros 30 min del día">
+            Cumplí mi hábito de mentalidad
+          </PlanCheck>
+        </PlanCaja>
+      )}
 
       {/* Cuerpo y hábitos */}
       <PlanCaja titulo="💪 ENTRENO Y DESCANSO">
         <PlanCheck hecho={!!dia.entreno} onClick={()=>upd(c=>{c.dias[fecha]=c.dias[fecha]||{};c.dias[fecha].entreno=!c.dias[fecha].entreno; if(c.dias[fecha].entreno)c.dias[fecha].descanso=false;})} sub="CrossFit / fuerza / cardio">Entrené hoy</PlanCheck>
-        <PlanCheck hecho={!!dia.descanso} onClick={()=>upd(c=>{c.dias[fecha]=c.dias[fecha]||{};c.dias[fecha].descanso=!c.dias[fecha].descanso; if(c.dias[fecha].descanso)c.dias[fecha].entreno=false;})} sub="Día de descanso planificado (caminata suave, movilidad)">Descanso activo</PlanCheck>
+        <PlanCheck hecho={!!dia.descanso} onClick={()=>upd(c=>{c.dias[fecha]=c.dias[fecha]||{};c.dias[fecha].descanso=!c.dias[fecha].descanso; if(c.dias[fecha].descanso)c.dias[fecha].entreno=false;})} sub="Tu 'versión mínima' de movimiento en un día difícil: caminata suave, movilidad">Descanso activo</PlanCheck>
         <PlanCheck hecho={!!dia.sueno} onClick={()=>toggleDia("sueno")} sub="Dormí 7 h o más">Buen descanso anoche</PlanCheck>
       </PlanCaja>
 
@@ -7206,8 +7312,22 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
     </PlanCaja>
   ) : (
     <>
+      <PlanCaja titulo={`FASE ${faseActual.id} · ${faseActual.nombre.toUpperCase()}`}>
+        <div style={{fontSize:11,color:G.textSec,lineHeight:1.6,marginBottom:8,fontFamily:"system-ui,sans-serif"}}>{faseActual.foco}</div>
+        <PlanBarra pct={((diaN-faseActual.rango[0]+1)/(faseActual.rango[1]-faseActual.rango[0]+1))*100}
+          color={faseActual.id===1?"#6FA3D4":faseActual.id===2?"#D4A35C":"#C9724C"}/>
+        <div style={{fontSize:10,color:G.textDim,marginTop:4,fontFamily:"system-ui,sans-serif"}}>Día {diaN} de 100 · Fase {faseActual.id} de 3</div>
+      </PlanCaja>
       <PlanCaja titulo={`HOY · ${fecha===hoy?"DÍA "+diaN:planFechaCorta(fecha).toUpperCase()}`}>{metasDiarias.map(filaMeta)}</PlanCaja>
-      <PlanCaja titulo={`SEMANA ${semana.idx+1} (días ${semana.idx*7+1}–${semana.idx*7+7})`}>{semana.metas.map(filaMeta)}</PlanCaja>
+      <PlanCaja titulo={`SEMANA ${semana.idx+1} (días ${semana.idx*7+1}–${semana.idx*7+7})`}>
+        {semana.metas.map(filaMeta)}
+        <div style={{marginTop:8}}>
+          <div style={{fontSize:10,color:G.textSec,marginBottom:3,fontFamily:"system-ui,sans-serif"}}>¿Qué ayudó o qué estorbó esta semana?</div>
+          <textarea value={estado.notasSemana?.[semana.idx] || ""} placeholder="Ej: la semana laboral complicó el almuerzo; cociné de más el finde y ayudó mucho."
+            onChange={e=>upd(c=>{ c.notasSemana = c.notasSemana || {}; c.notasSemana[semana.idx] = e.target.value; })}
+            style={{...S.inp(false),height:52,resize:"none"}}/>
+        </div>
+      </PlanCaja>
       <PlanCaja titulo={`QUINCENA ${quincena.idx+1} (días ${quincena.idx*15+1}–${quincena.idx*15+15})`}>
         {quincena.metas.map(filaMeta)}
         <PlanCheck hecho={!!estado.revisiones[quincena.idx]} onClick={()=>upd(c=>{c.revisiones[quincena.idx]=!c.revisiones[quincena.idx];})}
@@ -7294,11 +7414,39 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
   // ───────────────────────── REINICIO ─────────────────────────
   const tabReinicio = (
     <>
-      {!comenzo ? (
+      {pendienteInicio ? (
+        <PlanCaja titulo="❄️ DÍA 1 CONFIRMADO">
+          <div style={{fontSize:12,color:G.text,lineHeight:1.6,marginBottom:10,fontFamily:"system-ui,sans-serif"}}>
+            Arranca el <strong style={{color:G.gold}}>{planFechaCorta(estado.inicio)}</strong> — faltan {diasParaArrancar} día{diasParaArrancar===1?"":"s"}.
+            Mientras tanto, terminá los pasos de abajo.
+          </div>
+          {PLAN_ARRANQUE.map(p => (
+            <PlanCheck key={p.id} hecho={!!estado.arranque[p.id]} onClick={()=>upd(c=>{c.arranque[p.id]=!c.arranque[p.id];})} sub={p.d}>{p.t}</PlanCheck>
+          ))}
+          <div style={{display:"flex",gap:6,marginTop:10}}>
+            <PlanInput label="Cambiar mi Día 1" tipo="date" value={inicioElegido} onChange={setInicioElegido}/>
+          </div>
+          <div style={{display:"flex",gap:6,marginTop:8}}>
+            <button style={{...btnLinea,flex:1}} onClick={empezar}>GUARDAR NUEVA FECHA</button>
+            <button style={{...btnGrande,flex:1}} onClick={empezarHoy}>🔥 EMPEZAR HOY</button>
+          </div>
+        </PlanCaja>
+      ) : !comenzo ? (
         <>
+          <PlanCaja titulo="❄️ WINTER ARC — DE DÓNDE SALE ESTO">
+            <div style={{fontSize:11,color:G.textSec,lineHeight:1.6,fontFamily:"system-ui,sans-serif"}}>
+              Está inspirado en el <strong style={{color:G.gold}}>"Winter Arc"</strong>, el reto viral de 90-100 días (octubre → enero)
+              que busca máxima disciplina antes de fin de año. Lo adaptamos a tu objetivo de bajar a {planNum(perfil.bfObjetivo)||10}% de grasa:
+              100 días en <strong style={{color:G.gold}}>3 fases</strong> de ~33 días (Cimientos → Construcción → Empuje), y la regla de oro:
+              en un día difícil usá la <strong style={{color:"#D4A35C"}}>versión mínima</strong> (➖) en una comida en vez de fallar del todo —
+              eso también cuenta y no te rompe la racha.
+            </div>
+          </PlanCaja>
+
           <PlanCaja titulo="🚀 CÓMO EMPEZAR — 7 PASOS">
             <div style={{fontSize:11,color:G.textSec,lineHeight:1.6,marginBottom:10,fontFamily:"system-ui,sans-serif"}}>
-              Empezar bien es preparar el terreno antes del Día 1. Tildá cada paso a medida que lo hacés.
+              Empezar bien es preparar el terreno antes del Día 1. Tildá cada paso a medida que lo hacés. El Winter Arc "oficial" arranca
+              el 1° de octubre — por eso te lo dejamos precargado como fecha, pero tu Día 1 es el que vos elijas.
             </div>
             {PLAN_ARRANQUE.map(p => (
               <PlanCheck key={p.id} hecho={!!estado.arranque[p.id]} onClick={()=>upd(c=>{c.arranque[p.id]=!c.arranque[p.id];})} sub={p.d}>{p.t}</PlanCheck>
@@ -7367,8 +7515,8 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
       <div style={{padding:"1rem 1rem .75rem",borderBottom:`1px solid ${G.border}`,background:G.surf,marginBottom:10,position:"sticky",top:0,zIndex:5}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
           <div>
-            <div style={{fontSize:13,fontWeight:700,color:G.gold,letterSpacing:1,fontFamily:"'Courier New',monospace"}}>🔥 PLAN 100 DÍAS</div>
-            <div style={{fontSize:10,color:G.textSec,marginTop:2}}>{comenzo ? `Día ${Math.min(diaN,100)} de 100 · racha ${rachas.actual} 🔥` : "Aún sin empezar"}</div>
+            <div style={{fontSize:13,fontWeight:700,color:G.gold,letterSpacing:1,fontFamily:"'Courier New',monospace"}}>🔥 WINTER ARC</div>
+            <div style={{fontSize:10,color:G.textSec,marginTop:2}}>{comenzo ? `Día ${Math.min(diaN,100)}/100 · Fase ${faseActual.id} · racha ${rachas.actual} 🔥` : "Reto de 100 días · aún sin empezar"}</div>
           </div>
           <button onClick={onBack} style={S.btnSm(false)}>☰ Pilares</button>
         </div>
@@ -7438,7 +7586,7 @@ function VpApp() {
     setNav("day");
   }
 
-  // Plan 100 días — objetivos, hidratación, balanza crudo→cocido, logros y reinicio
+  // Winter Arc · Plan 100 días — fases, objetivos, hidratación, balanza crudo→cocido, logros y reinicio
   if (mostrarPlan) {
     return <VpPlan
       onBack={() => setMostrarPlan(false)}
