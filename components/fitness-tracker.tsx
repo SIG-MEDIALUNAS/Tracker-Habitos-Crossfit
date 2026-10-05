@@ -1405,7 +1405,7 @@ function vpComprasActivasPath()  { return `vida_personal/_compras/activos/lista`
 function vpComprasSemanaPath(sid) { return `vida_personal/_compras/semanas/${sid}`; }
 function vpComprasMesPath(mid)    { return `vida_personal/_compras/meses/${mid}`; }
 
-function VpListaCompras({ onBack, onAbrirStock }) {
+function VpListaCompras({ onBack, onAbrirStock, onAbrirFijos }) {
   // ── Items activos (pendientes de comprar o comprados recientemente) ──────────
   const [items, setItems] = useState([]);
   // ── Historial de la semana actual ────────────────────────────────────────────
@@ -1429,6 +1429,28 @@ function VpListaCompras({ onBack, onAbrirStock }) {
 
   const sidActual = vpSemanaId();
   const midActual = vpMesId();
+  // ── Gastos fijos del hogar (suman al gasto mensual y al ranking por categoría) ──
+  const gfEst = useGastosFijos(midActual);
+  const [compraPorSector, setCompraPorSector] = useState({}); // total del mes por sector de compras
+
+  // Total del mes por sector: se arma leyendo las semanas del mes (solo ítems de este mes)
+  useEffect(() => {
+    if (!firebaseOk || !mesActual) return;
+    let vivo = true;
+    const sids = Object.keys(mesActual.semanas || {});
+    Promise.all(sids.map(sid => getDoc(doc(db, vpComprasSemanaPath(sid))))).then(snaps => {
+      const tot = {};
+      snaps.forEach(sn => {
+        if (!sn.exists()) return;
+        Object.values(sn.data().dias || {}).forEach(d => (d.items || []).forEach(it => {
+          if (it.ts && vpMesId(it.ts) !== midActual) return;
+          tot[it.sector] = (tot[it.sector] || 0) + (it.monto || 0);
+        }));
+      });
+      if (vivo) setCompraPorSector(tot);
+    }).catch(() => {});
+    return () => { vivo = false; };
+  }, [mesActual?.total]);
 
   // ── Carga inicial ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1512,14 +1534,25 @@ function VpListaCompras({ onBack, onAbrirStock }) {
   }
 
   async function cargarHistorialMeses() {
-    if (!firebaseOk) return;
     const mids = [];
     for (let i=1; i<=6; i++) {
       const d = new Date(); d.setMonth(d.getMonth()-i);
       mids.push(vpMesId(d.getTime()));
     }
-    const snaps = await Promise.all(mids.map(mid => getDoc(doc(db, vpComprasMesPath(mid)))));
-    setMesesHist(snaps.filter(s=>s.exists()).map(s=>s.data()));
+    const [snaps, fijos] = await Promise.all([
+      firebaseOk ? Promise.all(mids.map(mid => getDoc(doc(db, vpComprasMesPath(mid))))) : Promise.resolve(mids.map(()=>null)),
+      gfCargarMeses(mids),
+    ]);
+    // Cada mes = compras + gastos fijos pagados
+    const lista = mids.map((mid,i) => {
+      const base = snaps[i] && snaps[i].exists() ? snaps[i].data() : null;
+      const fj = fijos[mid];
+      if (!base && !(fj && fj.total>0)) return null;
+      const b = base || { mid, semanas:{}, total:0 };
+      return { ...b, mid, totalCompras:b.total||0, fijosTotal:fj?.total||0, fijosLista:fj?.lista||[],
+        total:(b.total||0)+(fj?.total||0) };
+    }).filter(Boolean);
+    setMesesHist(lista);
   }
 
   // Expande/colapsa el detalle día-por-día de una semana dentro del historial mensual
@@ -1600,7 +1633,9 @@ function VpListaCompras({ onBack, onAbrirStock }) {
   const totalSector = compradosSector.reduce((a,it)=>a+(it.monto||0),0);
   const esSectorAlimento = VP_SECTORES_ALIMENTO.includes(sectorActivo);
   const totalSemanal = semanaActual?.total || 0;
-  const totalMensual = mesActual?.total || 0;
+  const totalComprasMes = mesActual?.total || 0;
+  const totalFijosMes = gfEst.resumen.totalPagado;          // solo lo PAGADO de gastos fijos
+  const totalMensual = totalComprasMes + totalFijosMes;      // compras + gastos fijos del hogar
   const diasSemana = semanaActual ? Object.entries(semanaActual.dias||{}) : [];
   const rankingSectores = VP_SECTORES_COMPRA.map(s => {
     const its = items.filter(it=>it.sector===s.id&&it.comprado);
@@ -1610,6 +1645,12 @@ function VpListaCompras({ onBack, onAbrirStock }) {
   const fmt = n => n.toLocaleString("es-AR",{minimumFractionDigits:0,maximumFractionDigits:2});
 
   const DIAS_ORDEN = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
+  const rankingMes = [
+    ...VP_SECTORES_COMPRA.map(s => ({ ...s, total:compraPorSector[s.id] || 0 })),
+    { id:"fijos", label:"Hogar · Gastos fijos", emoji:"🏠", color:GF_COLOR, total:totalFijosMes },
+  ].filter(s => s.total > 0).sort((a, b) => b.total - a.total);
+  const fijosPagadosLista = gfPagadosLista(gfEst.mes);
+
 
   // ── PANTALLA HISTORIAL SEMANAS ────────────────────────────────────────────────
   if (vistaHistorial==="semanas") {
@@ -1683,6 +1724,20 @@ function VpListaCompras({ onBack, onAbrirStock }) {
                 </div>
                 <div style={{fontSize:18,fontWeight:700,color:G.gold}}>${fmt(mes.total||0)}</div>
               </div>
+              {mes.fijosTotal>0 && (
+                <div style={{padding:"7px 2px",borderBottom:`1px solid ${G.border}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11}}>
+                    <span style={{color:GF_COLOR}}>🏠 Gastos fijos (hogar)</span>
+                    <span style={{color:GF_COLOR,fontWeight:600}}>${fmt(mes.fijosTotal)}</span>
+                  </div>
+                  {(mes.fijosLista||[]).map(f=>(
+                    <div key={f.id} style={{display:"flex",justifyContent:"space-between",fontSize:9,
+                      color:G.textDim,padding:"2px 0 0 14px"}}>
+                      <span>{f.emoji} {f.nombre}</span><span>${fmt(f.monto)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               {semanas.map(sem => {
                 const expandida = semanaExpandidaId === sem.sid;
                 const detalle   = detalleSemanasCache[sem.sid];
@@ -1748,6 +1803,11 @@ function VpListaCompras({ onBack, onAbrirStock }) {
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
         <button onClick={onBack} style={S.btn(false,false)}>← Pilares</button>
         <div style={{flex:1,textAlign:"right",display:"flex",gap:6,justifyContent:"flex-end"}}>
+          {onAbrirFijos&&<button onClick={onAbrirFijos} data-testid="btn-fijos"
+            style={{fontSize:10,padding:"5px 10px",borderRadius:3,letterSpacing:.5,
+              background:G.surf2,color:G.textSec,border:`1px solid ${G.border}`,cursor:"pointer",fontWeight:600}}>
+            🏠 FIJOS
+          </button>}
           {onAbrirStock&&<button onClick={onAbrirStock}
             style={{fontSize:10,padding:"5px 10px",borderRadius:3,letterSpacing:.5,
               background:G.surf2,color:G.textSec,border:`1px solid ${G.border}`,cursor:"pointer",fontWeight:600}}>
@@ -1769,6 +1829,8 @@ function VpListaCompras({ onBack, onAbrirStock }) {
         </div>
       </div>
 
+      <GfBanner alerta={gfEst.alerta} onClick={onAbrirFijos}/>
+
       {/* KPIs semanal / mensual */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
         <div onClick={()=>{cargarHistorialSemanas();setVistaHistorial("semanas");}}
@@ -1782,7 +1844,8 @@ function VpListaCompras({ onBack, onAbrirStock }) {
           style={{border:`1px solid ${G.border}`,borderRadius:4,padding:"12px",
             background:G.surf,textAlign:"center",cursor:"pointer"}}>
           <div style={{fontSize:9,color:G.textDim,letterSpacing:1,marginBottom:4}}>ESTE MES</div>
-          <div style={{fontSize:18,fontWeight:700,color:G.gold}}>${fmt(totalMensual)}</div>
+          <div data-testid="total-mensual" style={{fontSize:18,fontWeight:700,color:G.gold}}>${fmt(totalMensual)}</div>
+          {totalFijosMes>0&&<div style={{fontSize:9,color:GF_COLOR,marginTop:3}}>incl. ${fmt(totalFijosMes)} fijos 🏠</div>}
           <div style={{fontSize:9,color:G.textDim,marginTop:4}}>Ver historial →</div>
         </div>
       </div>
@@ -1837,6 +1900,39 @@ function VpListaCompras({ onBack, onAbrirStock }) {
           </div>
         ))}
       </div>
+
+      {/* Ranking del MES por categoría — compras por sector + gastos fijos del hogar */}
+      {rankingMes.length>0 && (
+        <div data-testid="ranking-mes" style={{border:`1px solid ${G.border}`,borderRadius:4,background:G.surf,
+          padding:"12px",marginBottom:16}}>
+          <div style={{fontSize:9,color:G.gold,letterSpacing:2,marginBottom:10}}>RANKING DEL MES POR CATEGORÍA</div>
+          {rankingMes.map((s,i) => (
+            <div key={s.id} onClick={()=>s.id==="fijos"?(onAbrirFijos&&onAbrirFijos()):setSectorActivo(s.id)}
+              style={{padding:"7px 8px",borderRadius:3,marginBottom:3,cursor:"pointer",
+                border:`1px solid ${s.color}22`,background:`${s.color}11`}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:9,color:G.textDim,width:14,textAlign:"center",
+                  fontFamily:"'Courier New',monospace"}}>{["I","II","III","IV","V","VI"][i]}</span>
+                <span style={{fontSize:14}}>{s.emoji}</span>
+                <span style={{flex:1,fontSize:11,color:G.textSec}}>{s.label}</span>
+                <span style={{fontSize:9,color:G.textDim}}>{totalMensual>0?Math.round(s.total/totalMensual*100):0}%</span>
+                <span style={{fontSize:12,fontWeight:700,color:s.color,minWidth:60,textAlign:"right"}}>${fmt(s.total)}</span>
+              </div>
+              {s.id==="fijos" && fijosPagadosLista.map(f=>(
+                <div key={f.id} style={{display:"flex",justifyContent:"space-between",fontSize:10,
+                  color:G.textDim,padding:"2px 0 0 36px"}}>
+                  <span>{f.emoji} {f.nombre}</span><span>${fmt(f.monto)}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,borderTop:`1px solid ${G.border}`,
+            paddingTop:8,marginTop:6}}>
+            <span style={{color:G.textSec}}>Total del mes</span>
+            <span style={{color:G.gold,fontWeight:700}}>${fmt(totalMensual)}</span>
+          </div>
+        </div>
+      )}
 
       {/* Tabs sectores */}
       <div style={{display:"flex",gap:4,marginBottom:12,overflowX:"auto"}}>
@@ -3640,7 +3736,7 @@ function VpTablaNutricional({ onBack }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // PANTALLA DE SELECCIÓN — 5 PILARES
 // ═══════════════════════════════════════════════════════════════════════════════
-function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros, onSelectPlan }) {
+function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros, onSelectPlan, onSelectFijos }) {
   const [codigo, setCodigo] = useState("");
   const [err, setErr]       = useState("");
   const [scores, setScores] = useState({});
@@ -3788,6 +3884,8 @@ function VpSelector({ onSelect, onSelectHoy, onSelectCompras, onSelectLogros, on
         )}
       </div>
 
+      {/* Gastos fijos del hogar — acceso + alerta de los días 5 */}
+      {onSelectFijos && <GfTarjetaSelector onAbrir={onSelectFijos}/>}
 
       {/* Pilares */}
       {VP_PILARES.map(p => {
@@ -7559,11 +7657,566 @@ function VpPlan({ onBack, onAbrirCocina, onAbrirCalculadora, onAbrirTabla, onAbr
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GASTOS FIJOS (HOGAR) — Gas, luz, agua, internet…
+//  · PLANTILLA: se carga UNA sola vez (nombre, N° de cliente, notas) y se reutiliza todos los meses.
+//  · REGISTRO MENSUAL: cada mes solo se carga el MONTO y se tilda "pagado".
+//  · Lo PAGADO suma al gasto del mes en Compras (total mensual, ranking por categoría e historial).
+//  · ALERTA: desde el día 5 de cada mes avisa si falta cargar monto o pagar (el día 5 aparece además un aviso emergente).
+// Persistencia: Firestore (si está disponible) + copia en localStorage.
+// ═══════════════════════════════════════════════════════════════════════════
+const GF_PLANTILLA_PATH = "vida_personal/_gastos_fijos/plantilla/actual";
+function gfMesPath(mid) { return `vida_personal/_gastos_fijos/meses/${mid}`; }
+const GF_LS_PLANTILLA = "gf_plantilla_v1";
+function gfLsMes(mid) { return `gf_mes_${mid}`; }
+const GF_DIA_ALERTA = 5;
+const GF_COLOR = "#5FB3A8"; // color de la categoría "Hogar · Gastos fijos" en rankings
+const GF_SUGERIDOS = [
+  { nombre:"Gas",       emoji:"🔥" },
+  { nombre:"Luz",       emoji:"💡" },
+  { nombre:"Agua",      emoji:"🚰" },
+  { nombre:"Internet",  emoji:"🌐" },
+  { nombre:"Celular",   emoji:"📱" },
+  { nombre:"Alquiler / Expensas", emoji:"🏢" },
+];
+
+function gfLsGet(k) { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; } catch(e) { return null; } }
+function gfLsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} }
+
+async function gfLeer(path, lsKey, vacio) {
+  if (firebaseOk) {
+    try {
+      const s = await getDoc(doc(db, path));
+      if (s.exists()) { const d = s.data(); gfLsSet(lsKey, d); return d; }
+    } catch(e) {}
+  }
+  return gfLsGet(lsKey) || vacio;
+}
+async function gfEscribir(path, lsKey, data) {
+  gfLsSet(lsKey, data);
+  if (!firebaseOk) return true;
+  try { await setDoc(doc(db, path), data); return true; } catch(e) { return false; }
+}
+
+// "15000" · "15.000" · "15.000,50" · "15000,5" → número
+function gfMonto(txt) {
+  if (txt == null) return 0;
+  let s = String(txt).trim().replace(/[$\s]/g, "");
+  if (!s) return 0;
+  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, "");
+  const n = parseFloat(s);
+  return isNaN(n) || n < 0 ? 0 : n;
+}
+function gfFmt(n) { return (n || 0).toLocaleString("es-AR", { minimumFractionDigits:0, maximumFractionDigits:2 }); }
+function gfMesAnterior(mid) {
+  const [a, m] = mid.split("-").map(Number);
+  const d = new Date(a, m - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function gfMesSiguiente(mid) {
+  const [a, m] = mid.split("-").map(Number);
+  const d = new Date(a, m, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function gfMesLabel(mid) {
+  const [a, m] = mid.split("-").map(Number);
+  return `${MESES[m - 1]} ${a}`;
+}
+function gfNuevoId() { return `gf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; }
+
+// Lo que se suma al gasto del mes: SOLO lo pagado (con monto). Incluye registros de gastos que luego se archivaron.
+function gfTotalPagado(mes) {
+  return Object.values(mes?.items || {}).reduce((a, r) => a + (r && r.pagado && r.monto ? r.monto : 0), 0);
+}
+function gfPagadosLista(mes) {
+  return Object.entries(mes?.items || {})
+    .filter(([, r]) => r && r.pagado && r.monto)
+    .map(([id, r]) => ({ id, nombre:r.nombre || "Gasto fijo", emoji:r.emoji || "🏠", monto:r.monto }))
+    .sort((a, b) => b.monto - a.monto);
+}
+
+// Resumen del mes a partir de plantilla + registro
+function gfResumen(plantilla, mes) {
+  const activos = (plantilla?.items || []).filter(f => f.activo !== false);
+  const filas = activos.map(f => {
+    const r = mes?.items?.[f.id] || {};
+    return { ...f, monto:r.monto || 0, pagado:!!r.pagado, fechaPago:r.fechaPago || null };
+  });
+  const totalPagado = gfTotalPagado(mes);
+  const aPagar = filas.filter(f => !f.pagado).reduce((a, f) => a + f.monto, 0);
+  const sinMonto = filas.filter(f => !f.monto).length;
+  const sinPagar = filas.filter(f => !f.pagado).length;
+  return {
+    filas, cant:filas.length, totalPagado, aPagar, sinMonto, sinPagar,
+    pagados:filas.length - sinPagar,
+    completo:filas.length > 0 && sinMonto === 0 && sinPagar === 0,
+  };
+}
+
+// Alerta: a partir del día 5 si falta algo. Devuelve null si no corresponde.
+function gfAlerta(resumen, hoy) {
+  const h = hoy || new Date();
+  if (!resumen || resumen.cant === 0 || resumen.completo) return null;
+  if (h.getDate() < GF_DIA_ALERTA) return null;
+  const es5 = h.getDate() === GF_DIA_ALERTA;
+  const partes = [];
+  if (resumen.sinMonto > 0) partes.push(`${resumen.sinMonto} sin monto`);
+  if (resumen.sinPagar > 0) partes.push(`${resumen.sinPagar} sin pagar`);
+  return {
+    nivel: es5 ? "hoy" : "atrasada",
+    titulo: es5 ? "📅 HOY ES 5 — GASTOS FIJOS DEL HOGAR" : "⏰ GASTOS FIJOS PENDIENTES DEL MES",
+    detalle: partes.join(" · "),
+  };
+}
+
+// Hook: plantilla + registro del mes (solo lectura, para Selector y Compras)
+function useGastosFijos(mid) {
+  const [est, setEst] = useState({ cargando:true, plantilla:{ items:[] }, mes:{ items:{} } });
+  useEffect(() => {
+    let vivo = true;
+    Promise.all([
+      gfLeer(GF_PLANTILLA_PATH, GF_LS_PLANTILLA, { items:[] }),
+      gfLeer(gfMesPath(mid), gfLsMes(mid), { items:{} }),
+    ]).then(([p, m]) => {
+      if (vivo) setEst({ cargando:false, plantilla:{ items:p.items || [] }, mes:{ items:m.items || {} } });
+    }).catch(() => { if (vivo) setEst(e => ({ ...e, cargando:false })); });
+    return () => { vivo = false; };
+  }, [mid]);
+  const resumen = gfResumen(est.plantilla, est.mes);
+  return { ...est, resumen, alerta:gfAlerta(resumen) };
+}
+
+// Banner de alerta (clickeable)
+function GfBanner({ alerta, onClick }) {
+  if (!alerta) return null;
+  const hoy = alerta.nivel === "hoy";
+  return (
+    <div onClick={onClick} data-testid="gf-banner"
+      style={{ border:`1px solid ${hoy ? G.gold : "#C9724C"}`, background:hoy ? G.goldDim : G.errBg,
+        borderRadius:4, padding:"10px 12px", marginBottom:12, cursor:onClick ? "pointer" : "default" }}>
+      <div style={{ fontSize:11, fontWeight:700, color:hoy ? G.gold : "#C9724C", letterSpacing:.5,
+        fontFamily:"'Courier New',monospace" }}>{alerta.titulo}</div>
+      <div style={{ fontSize:11, color:G.textSec, marginTop:3 }}>
+        {alerta.detalle}{onClick ? " · Tocá para cargarlos →" : ""}
+      </div>
+    </div>
+  );
+}
+
+// Tarjeta de acceso en el selector principal + aviso emergente el día 5
+function GfTarjetaSelector({ onAbrir }) {
+  const mid = vpMesId();
+  const { cargando, resumen, alerta } = useGastosFijos(mid);
+  const [aviso, setAviso] = useState(false);
+  useEffect(() => {
+    if (cargando || !alerta) return;
+    const hoy = new Date();
+    if (hoy.getDate() !== GF_DIA_ALERTA) return;
+    const clave = `gf_aviso_${hoy.getFullYear()}-${hoy.getMonth() + 1}-${hoy.getDate()}`;
+    if (!gfLsGet(clave)) setAviso(true);
+  }, [cargando, !!alerta]);
+  function cerrarAviso(abrir) {
+    const hoy = new Date();
+    gfLsSet(`gf_aviso_${hoy.getFullYear()}-${hoy.getMonth() + 1}-${hoy.getDate()}`, 1);
+    setAviso(false);
+    if (abrir) onAbrir();
+  }
+  const sub = cargando ? "Cargando…"
+    : resumen.cant === 0 ? "Cargá tus gastos una sola vez (Gas, Luz, Agua…) →"
+    : `${resumen.pagados}/${resumen.cant} pagados · $${gfFmt(resumen.totalPagado)} este mes`;
+  const hot = !!alerta;
+  return (
+    <>
+      <div onClick={onAbrir} data-testid="gf-tarjeta"
+        style={{ display:"flex", alignItems:"center", gap:10, padding:"11px 12px", marginBottom:20,
+          borderRadius:4, cursor:"pointer", background:hot ? (alerta.nivel === "hoy" ? G.goldDim : G.errBg) : G.surf,
+          border:`1px solid ${hot ? (alerta.nivel === "hoy" ? G.gold : "#C9724C") : G.border}` }}>
+        <span style={{ fontSize:20 }}>🏠</span>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:11, fontWeight:700, letterSpacing:1, fontFamily:"'Courier New',monospace",
+            color:hot ? (alerta.nivel === "hoy" ? G.gold : "#C9724C") : G.textSec }}>
+            {hot ? alerta.titulo : "GASTOS FIJOS · HOGAR"}
+          </div>
+          <div style={{ fontSize:10, color:G.textDim, marginTop:2 }}>{hot ? alerta.detalle : sub}</div>
+        </div>
+        <span style={{ fontSize:12, color:G.textDim }}>›</span>
+      </div>
+      {aviso && (
+        <div data-testid="gf-modal" style={{ position:"fixed", inset:0, background:"#000000cc", zIndex:999,
+          display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+          <div style={{ background:G.surf, border:`1px solid ${G.gold}`, borderRadius:6, padding:"20px 18px",
+            maxWidth:340, width:"100%", textAlign:"center" }}>
+            <div style={{ fontSize:34, marginBottom:8 }}>📅</div>
+            <div style={{ fontSize:13, fontWeight:700, color:G.gold, letterSpacing:1,
+              fontFamily:"'Courier New',monospace", marginBottom:6 }}>HOY ES 5 · GASTOS FIJOS</div>
+            <div style={{ fontSize:12, color:G.textSec, lineHeight:1.5, marginBottom:14 }}>
+              Es momento de cargar los montos de {MESES[new Date().getMonth()]} y marcar lo que ya pagaste.
+              <div style={{ marginTop:6, color:G.text }}>{alerta?.detalle}</div>
+            </div>
+            <div style={{ display:"flex", gap:8 }}>
+              <button onClick={() => cerrarAviso(false)} style={{ ...S.btn(false, false), flex:1 }}>Más tarde</button>
+              <button onClick={() => cerrarAviso(true)} style={{ ...S.btn(true, false), flex:1 }}>Cargar ahora</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// Totales de varios meses (para historial en Compras)
+async function gfCargarMeses(mids) {
+  const out = {};
+  await Promise.all(mids.map(async mid => {
+    const m = await gfLeer(gfMesPath(mid), gfLsMes(mid), { items:{} });
+    out[mid] = { total:gfTotalPagado(m), lista:gfPagadosLista(m) };
+  }));
+  return out;
+}
+
+// ─── PANTALLA PRINCIPAL ──────────────────────────────────────────────────────
+function VpGastosFijos({ onBack }) {
+  const midHoy = vpMesId();
+  const [mid, setMid] = useState(midHoy);
+  const [plantilla, setPlantilla] = useState({ items:[] });
+  const [mes, setMes] = useState({ mid:midHoy, items:{} });
+  const [mesAnt, setMesAnt] = useState({ items:{} });
+  const [hist, setHist] = useState({});
+  const [cargando, setCargando] = useState(true);
+  const [vista, setVista] = useState("mes"); // mes | plantilla
+  const [aviso, setAviso] = useState(null);   // id del gasto que necesita monto
+  const [copiado, setCopiado] = useState(null);
+  const [nuevo, setNuevo] = useState({ nombre:"", nCliente:"", notas:"" });
+  const [borrar, setBorrar] = useState(null);
+  const [save, setSave] = useState("idle");
+
+  useEffect(() => {
+    let vivo = true;
+    setCargando(true);
+    Promise.all([
+      gfLeer(GF_PLANTILLA_PATH, GF_LS_PLANTILLA, { items:[] }),
+      gfLeer(gfMesPath(mid), gfLsMes(mid), { items:{} }),
+      gfLeer(gfMesPath(gfMesAnterior(mid)), gfLsMes(gfMesAnterior(mid)), { items:{} }),
+    ]).then(([p, m, a]) => {
+      if (!vivo) return;
+      setPlantilla({ items:p.items || [] });
+      setMes({ mid, items:m.items || {} });
+      setMesAnt({ items:a.items || {} });
+      setCargando(false);
+    });
+    return () => { vivo = false; };
+  }, [mid]);
+
+  useEffect(() => {
+    const mids = [1, 2, 3, 4, 5, 6].map(i => { let x = midHoy; for (let k = 0; k < i; k++) x = gfMesAnterior(x); return x; });
+    gfCargarMeses(mids).then(setHist).catch(() => {});
+  }, []);
+
+  async function guardarMes(nuevoMes) {
+    setMes(nuevoMes); setSave("saving");
+    const ok = await gfEscribir(gfMesPath(mid), gfLsMes(mid), { mid, items:nuevoMes.items });
+    setSave(ok ? "saved" : "error"); setTimeout(() => setSave("idle"), 1500);
+  }
+  async function guardarPlantilla(items) {
+    setPlantilla({ items }); setSave("saving");
+    const ok = await gfEscribir(GF_PLANTILLA_PATH, GF_LS_PLANTILLA, { items });
+    setSave(ok ? "saved" : "error"); setTimeout(() => setSave("idle"), 1500);
+  }
+  function actualizarReg(f, cambios) {
+    const prev = mes.items[f.id] || {};
+    const reg = { ...prev, nombre:f.nombre, emoji:f.emoji || "🏠", nCliente:f.nCliente || "", ...cambios };
+    guardarMes({ ...mes, items:{ ...mes.items, [f.id]:reg } });
+  }
+  function setMonto(f, txt) {
+    const m = gfMonto(txt);
+    const prev = mes.items[f.id] || {};
+    if ((prev.monto || 0) === m) return;
+    actualizarReg(f, m ? { monto:m } : { monto:0, pagado:false, fechaPago:null });
+    setAviso(null);
+  }
+  function togglePagado(f) {
+    if (!f.monto) { setAviso(f.id); return; }
+    setAviso(null);
+    actualizarReg(f, f.pagado ? { pagado:false, fechaPago:null } : { pagado:true, fechaPago:Date.now() });
+  }
+  function copiar(f) {
+    try { navigator.clipboard && navigator.clipboard.writeText(f.nCliente); } catch(e) {}
+    setCopiado(f.id); setTimeout(() => setCopiado(null), 1500);
+  }
+  function agregarGasto(base) {
+    const b = base || nuevo;
+    const nombre = (b.nombre || "").trim(); if (!nombre) return;
+    const sug = GF_SUGERIDOS.find(s => s.nombre.toLowerCase() === nombre.toLowerCase());
+    guardarPlantilla([...plantilla.items, {
+      id:gfNuevoId(), nombre, emoji:b.emoji || sug?.emoji || "🏠",
+      nCliente:(b.nCliente || "").trim(), notas:(b.notas || "").trim(), activo:true,
+    }]);
+    setNuevo({ nombre:"", nCliente:"", notas:"" });
+  }
+  function editarGasto(id, cambios) {
+    guardarPlantilla(plantilla.items.map(f => f.id === id ? { ...f, ...cambios } : f));
+  }
+  function eliminarGasto(id) {
+    guardarPlantilla(plantilla.items.filter(f => f.id !== id)); setBorrar(null);
+  }
+
+  const resumen = gfResumen(plantilla, mes);
+  const esMesActual = mid === midHoy;
+  const alerta = esMesActual ? gfAlerta(resumen) : null;
+  const ranking = [...resumen.filas].filter(f => f.monto > 0).sort((a, b) => b.monto - a.monto);
+  const maxMonto = ranking.length ? ranking[0].monto : 0;
+  const totalCargado = resumen.filas.reduce((a, f) => a + f.monto, 0);
+  const fila = { display:"flex", alignItems:"center", gap:10 };
+
+  const encabezado = (titulo) => (
+    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:16 }}>
+      <button onClick={vista === "plantilla" ? () => setVista("mes") : onBack} style={S.btn(false, false)}>
+        ← {vista === "plantilla" ? "Gastos del mes" : "Volver"}
+      </button>
+      <div style={{ flex:1, textAlign:"right" }}>
+        <span style={{ fontSize:10, padding:"5px 8px", borderRadius:3, letterSpacing:.5,
+          background:save === "saving" ? G.goldDim : save === "saved" ? G.okBg : G.surf2,
+          color:save === "saving" ? G.gold : save === "saved" ? "#7AB85A" : save === "error" ? "#C9724C" : G.textDim,
+          border:`1px solid ${G.border}` }}>
+          {save === "saving" ? "GUARDANDO…" : save === "saved" ? "✓ GUARDADO" : save === "error" ? "SOLO LOCAL" : "AUTO"}
+        </span>
+      </div>
+    </div>
+  );
+
+  const contenedor = { minHeight:"100vh", background:G.bg, fontFamily:"system-ui,sans-serif",
+    padding:"24px 16px 56px", maxWidth:430, margin:"0 auto" };
+
+  // ── VISTA: editar plantilla (se carga una sola vez) ───────────────────────
+  if (vista === "plantilla") {
+    return (
+      <div style={contenedor}>
+        {encabezado()}
+        <div style={{ textAlign:"center", marginBottom:14 }}>
+          <div style={{ fontSize:26 }}>⚙️</div>
+          <div style={{ fontSize:14, fontWeight:700, color:G.text, letterSpacing:1, fontFamily:"'Courier New',monospace" }}>
+            MIS GASTOS FIJOS
+          </div>
+          <div style={{ fontSize:10, color:G.textDim, marginTop:4 }}>
+            Se cargan una sola vez. Cada mes solo ponés el monto.
+          </div>
+        </div>
+
+        <div style={{ ...S.card, marginBottom:14 }}>
+          <div style={{ fontSize:9, color:G.gold, letterSpacing:2, marginBottom:8 }}>AGREGAR GASTO</div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:8 }}>
+            {GF_SUGERIDOS.filter(s => !plantilla.items.some(f => f.nombre.toLowerCase() === s.nombre.toLowerCase())).map(s => (
+              <button key={s.nombre} onClick={() => setNuevo(n => ({ ...n, nombre:s.nombre }))}
+                style={{ fontSize:10, padding:"4px 8px", borderRadius:12, cursor:"pointer",
+                  background:G.surf2, color:G.textSec, border:`1px solid ${G.border}` }}>
+                {s.emoji} {s.nombre}
+              </button>
+            ))}
+          </div>
+          <input value={nuevo.nombre} onChange={e => setNuevo({ ...nuevo, nombre:e.target.value })}
+            placeholder="Nombre (ej: Gas)" aria-label="nombre gasto" style={{ ...S.inp(false), marginBottom:6 }}/>
+          <input value={nuevo.nCliente} onChange={e => setNuevo({ ...nuevo, nCliente:e.target.value })}
+            placeholder="N° de cliente / cuenta" aria-label="numero cliente" style={{ ...S.inp(false), marginBottom:6 }}/>
+          <input value={nuevo.notas} onChange={e => setNuevo({ ...nuevo, notas:e.target.value })}
+            placeholder="Notas (empresa, vencimiento, débito…)" aria-label="notas gasto" style={{ ...S.inp(false), marginBottom:8 }}/>
+          <button onClick={() => agregarGasto()} style={{ ...S.btn(true, !nuevo.nombre.trim()), width:"100%" }}>
+            + AGREGAR
+          </button>
+        </div>
+
+        {plantilla.items.length === 0 && (
+          <div style={{ textAlign:"center", color:G.textDim, fontSize:12, padding:20 }}>
+            Todavía no cargaste ningún gasto fijo.
+          </div>
+        )}
+        {plantilla.items.map(f => (
+          <div key={f.id} style={{ ...S.card, opacity:f.activo === false ? .5 : 1 }}>
+            <div style={{ ...fila, marginBottom:6 }}>
+              <span style={{ fontSize:18 }}>{f.emoji || "🏠"}</span>
+              <input defaultValue={f.nombre} aria-label={`nombre ${f.id}`}
+                onBlur={e => e.target.value.trim() && e.target.value !== f.nombre && editarGasto(f.id, { nombre:e.target.value.trim() })}
+                style={{ ...S.inp(false), flex:1, fontWeight:600 }}/>
+            </div>
+            <input defaultValue={f.nCliente || ""} placeholder="N° de cliente" aria-label={`cliente ${f.id}`}
+              onBlur={e => e.target.value !== (f.nCliente || "") && editarGasto(f.id, { nCliente:e.target.value.trim() })}
+              style={{ ...S.inp(false), marginBottom:6 }}/>
+            <input defaultValue={f.notas || ""} placeholder="Notas" aria-label={`notas ${f.id}`}
+              onBlur={e => e.target.value !== (f.notas || "") && editarGasto(f.id, { notas:e.target.value.trim() })}
+              style={{ ...S.inp(false), marginBottom:8 }}/>
+            <div style={{ display:"flex", gap:6 }}>
+              <button onClick={() => editarGasto(f.id, { activo:f.activo === false })}
+                style={{ ...S.btnSm(false), flex:1 }}>
+                {f.activo === false ? "▶ Reactivar" : "⏸ Pausar (no aparece)"}
+              </button>
+              {borrar === f.id
+                ? <button onClick={() => eliminarGasto(f.id)}
+                    style={{ ...S.btnSm(false), color:"#C9724C", borderColor:"#C9724C" }}>¿Seguro? Eliminar</button>
+                : <button onClick={() => setBorrar(f.id)} aria-label={`borrar ${f.id}`}
+                    style={{ ...S.btnSm(false), color:G.textDim }}>🗑</button>}
+            </div>
+          </div>
+        ))}
+        <div style={{ fontSize:9, color:G.textDim, textAlign:"center", marginTop:8, lineHeight:1.5 }}>
+          Pausar oculta el gasto en los meses nuevos. Lo ya pagado en meses anteriores se conserva siempre.
+        </div>
+      </div>
+    );
+  }
+
+  // ── VISTA: gastos del mes ─────────────────────────────────────────────────
+  return (
+    <div style={contenedor}>
+      {encabezado()}
+
+      <div style={{ textAlign:"center", marginBottom:12 }}>
+        <div style={{ fontSize:28, marginBottom:6 }}>🏠</div>
+        <div style={{ fontSize:14, fontWeight:700, color:G.text, letterSpacing:1, fontFamily:"'Courier New',monospace" }}>
+          GASTOS FIJOS · HOGAR
+        </div>
+      </div>
+
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:14, marginBottom:14 }}>
+        <button onClick={() => setMid(gfMesAnterior(mid))} aria-label="mes anterior" style={S.btnSm(false)}>‹</button>
+        <div data-testid="gf-mes" style={{ fontSize:13, fontWeight:600, color:G.gold, minWidth:140, textAlign:"center" }}>
+          {gfMesLabel(mid)}
+        </div>
+        <button onClick={() => !esMesActual && setMid(gfMesSiguiente(mid))} aria-label="mes siguiente"
+          style={{ ...S.btnSm(false), opacity:esMesActual ? .3 : 1 }}>›</button>
+      </div>
+
+      <GfBanner alerta={alerta}/>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10 }}>
+        <div style={{ border:`1px solid ${G.border}`, borderRadius:4, padding:12, background:G.surf, textAlign:"center" }}>
+          <div style={{ fontSize:9, color:G.textDim, letterSpacing:1, marginBottom:4 }}>PAGADO</div>
+          <div data-testid="gf-pagado" style={{ fontSize:18, fontWeight:700, color:"#7AB85A" }}>${gfFmt(resumen.totalPagado)}</div>
+        </div>
+        <div style={{ border:`1px solid ${G.border}`, borderRadius:4, padding:12, background:G.surf, textAlign:"center" }}>
+          <div style={{ fontSize:9, color:G.textDim, letterSpacing:1, marginBottom:4 }}>POR PAGAR</div>
+          <div data-testid="gf-apagar" style={{ fontSize:18, fontWeight:700, color:resumen.aPagar > 0 ? G.gold : G.textDim }}>
+            ${gfFmt(resumen.aPagar)}
+          </div>
+        </div>
+      </div>
+      {resumen.cant > 0 && (
+        <div style={{ marginBottom:14 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:G.textDim, marginBottom:4 }}>
+            <span>{resumen.pagados} de {resumen.cant} pagados</span>
+            <span>Lo pagado suma a tus gastos del mes 🛒</span>
+          </div>
+          <div style={{ height:5, background:G.surf2, borderRadius:3, overflow:"hidden" }}>
+            <div style={{ width:`${(resumen.pagados / resumen.cant) * 100}%`, height:"100%", background:"#7AB85A" }}/>
+          </div>
+        </div>
+      )}
+
+      {cargando ? (
+        <div style={{ textAlign:"center", color:G.textDim, fontSize:11, padding:20, letterSpacing:1,
+          fontFamily:"'Courier New',monospace" }}>CARGANDO...</div>
+      ) : resumen.cant === 0 ? (
+        <div style={{ ...S.card, textAlign:"center", padding:"22px 14px" }}>
+          <div style={{ fontSize:12, color:G.textSec, marginBottom:12, lineHeight:1.5 }}>
+            Cargá una sola vez tus gastos fijos (Gas, Luz, Agua, Internet…) con su N° de cliente.
+            Después, cada mes solo ponés el monto.
+          </div>
+          <button onClick={() => setVista("plantilla")} style={S.btn(true, false)}>+ CARGAR MIS GASTOS FIJOS</button>
+        </div>
+      ) : resumen.filas.map(f => {
+        const ant = mesAnt.items?.[f.id]?.monto;
+        return (
+          <div key={f.id} data-testid={`gf-fila-${f.nombre}`}
+            style={{ border:`1px solid ${f.pagado ? "#5C8A4A55" : G.border}`, borderRadius:4, padding:"10px 12px",
+              marginBottom:6, background:f.pagado ? G.okBg : G.surf }}>
+            <div style={fila}>
+              <div onClick={() => togglePagado(f)} role="checkbox" aria-checked={f.pagado} aria-label={`pagado ${f.nombre}`}
+                style={{ width:20, height:20, borderRadius:3, flexShrink:0, cursor:"pointer", touchAction:"manipulation",
+                  border:`1.5px solid ${f.pagado ? "#7AB85A" : G.textDim}`, background:f.pagado ? "#7AB85A" : "transparent",
+                  display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, color:G.bg, fontWeight:700 }}>
+                {f.pagado ? "✓" : ""}
+              </div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:f.pagado ? G.textSec : G.text }}>
+                  {f.emoji || "🏠"} {f.nombre}
+                </div>
+                {f.nCliente && (
+                  <div onClick={() => copiar(f)} style={{ fontSize:10, color:G.textDim, marginTop:1, cursor:"pointer" }}>
+                    N° cliente: <span style={{ color:G.textSec, fontFamily:"'Courier New',monospace" }}>{f.nCliente}</span>
+                    {" "}<span style={{ color:copiado === f.id ? "#7AB85A" : G.textDim }}>{copiado === f.id ? "✓ copiado" : "⧉"}</span>
+                  </div>
+                )}
+                {f.notas && <div style={{ fontSize:9, color:G.textDim, marginTop:1 }}>{f.notas}</div>}
+              </div>
+              <input key={`${mid}_${f.id}_${f.monto}`} defaultValue={f.monto || ""} aria-label={`monto ${f.nombre}`}
+                onBlur={e => setMonto(f, e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
+                placeholder={ant ? `ant. $${gfFmt(ant)}` : "$ monto"} type="text" inputMode="decimal"
+                style={{ width:92, fontSize:13, padding:"6px 8px", textAlign:"right", border:`1px solid ${aviso === f.id ? "#C9724C" : G.border}`,
+                  borderRadius:3, background:G.surf2, color:G.gold, outline:"none", fontFamily:"inherit" }}/>
+            </div>
+            {aviso === f.id && (
+              <div style={{ fontSize:10, color:"#C9724C", marginTop:6 }}>Cargá primero el monto para marcarlo como pagado.</div>
+            )}
+            {f.pagado && f.fechaPago && (
+              <div style={{ fontSize:9, color:G.textDim, marginTop:4 }}>
+                Pagado el {vpFechaCorta(f.fechaPago)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {resumen.cant > 0 && (
+        <button onClick={() => setVista("plantilla")} style={{ ...S.btn(false, false), width:"100%", marginTop:6, marginBottom:16 }}>
+          ⚙️ Editar mi lista de gastos fijos
+        </button>
+      )}
+
+      {ranking.length > 0 && (
+        <div style={{ ...S.card }}>
+          <div style={{ fontSize:9, color:G.gold, letterSpacing:2, marginBottom:10 }}>RANKING DEL MES · FIJOS</div>
+          {ranking.map((f, i) => (
+            <div key={f.id} style={{ marginBottom:7 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:3 }}>
+                <span style={{ color:G.textSec }}>{["I", "II", "III", "IV", "V", "VI", "VII", "VIII"][i] || i + 1} · {f.emoji || "🏠"} {f.nombre}</span>
+                <span style={{ color:GF_COLOR, fontWeight:700 }}>${gfFmt(f.monto)}</span>
+              </div>
+              <div style={{ height:4, background:G.surf2, borderRadius:2 }}>
+                <div style={{ width:`${(f.monto / maxMonto) * 100}%`, height:"100%", background:GF_COLOR, borderRadius:2, opacity:f.pagado ? 1 : .45 }}/>
+              </div>
+            </div>
+          ))}
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, borderTop:`1px solid ${G.border}`, paddingTop:8, marginTop:4 }}>
+            <span style={{ color:G.textSec }}>Total cargado</span>
+            <span style={{ color:G.gold, fontWeight:700 }}>${gfFmt(totalCargado)}</span>
+          </div>
+        </div>
+      )}
+
+      {esMesActual && Object.keys(hist).length > 0 && Object.values(hist).some(h => h.total > 0) && (
+        <div style={{ ...S.card }}>
+          <div style={{ fontSize:9, color:G.gold, letterSpacing:2, marginBottom:8 }}>MESES ANTERIORES</div>
+          {Object.keys(hist).sort().reverse().filter(k => hist[k].total > 0).map(k => (
+            <div key={k} style={{ display:"flex", justifyContent:"space-between", fontSize:11, padding:"5px 0",
+              borderBottom:`1px solid ${G.border}` }}>
+              <span onClick={() => setMid(k)} style={{ color:G.textSec, cursor:"pointer" }}>{gfMesLabel(k)}</span>
+              <span style={{ color:G.gold, fontWeight:600 }}>${gfFmt(hist[k].total)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function VpApp() {
   const [pilarInicial, setPilarInicial] = useState(null);
   const [mostrarCompras, setMostrarCompras] = useState(false);
   const [mostrarLogros, setMostrarLogros]   = useState(false);
   const [mostrarPlan, setMostrarPlan]       = useState(false);
+  const [mostrarFijos, setMostrarFijos]     = useState(false);
+  const [fijosDesde, setFijosDesde]         = useState("selector");
   const [mostrarStock, setMostrarStock]     = useState(false);
   const [mostrarCocina, setMostrarCocina]   = useState(false);
   const [mostrarRecetas, setMostrarRecetas] = useState(false);
@@ -7597,10 +8250,16 @@ function VpApp() {
     />;
   }
 
+  // Gastos fijos del hogar — plantilla única + monto/pago mensual; alimenta los gastos de Compras
+  if (mostrarFijos) {
+    return <VpGastosFijos onBack={() => { setMostrarFijos(false); if (fijosDesde==="compras") setMostrarCompras(true); }} />;
+  }
+
   // Lista de compras — pantalla independiente, transversal a los pilares
   if (mostrarCompras) {
     return <VpListaCompras
       onBack={() => setMostrarCompras(false)}
+      onAbrirFijos={() => { setFijosDesde("compras"); setMostrarCompras(false); setMostrarFijos(true); }}
       onAbrirStock={() => { setMostrarCompras(false); setMostrarStock(true); }}
     />;
   }
@@ -7657,6 +8316,7 @@ function VpApp() {
         onSelectCompras={() => setMostrarCompras(true)}
         onSelectLogros={() => setMostrarLogros(true)}
         onSelectPlan={() => setMostrarPlan(true)}
+        onSelectFijos={() => { setFijosDesde("selector"); setMostrarFijos(true); }}
       />
     );
   }
